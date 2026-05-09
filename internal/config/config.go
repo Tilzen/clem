@@ -23,6 +23,16 @@ var githubLoginRe = regexp.MustCompile(`^[a-zA-Z0-9-]{1,39}$`)
 // vaultRefRe matches ${vault:BUCKET.KEY} in MCP server env values.
 var vaultRefRe = regexp.MustCompile(`\$\{vault:([^.}]+)\.([^}]+)\}`)
 
+// extensionNameRe allows alphanumeric names with dots, hyphens, and underscores.
+// Rejects semicolons, spaces, backticks, and other shell-special characters.
+var extensionNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+
+// extensionRepoRe requires owner/repo format with safe characters only.
+var extensionRepoRe = regexp.MustCompile(`^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$`)
+
+// commitHashRe accepts hex SHA strings (full or prefix).
+var commitHashRe = regexp.MustCompile(`^[0-9a-fA-F]+$`)
+
 // OperatorConfig identifies the humans who are trusted to issue instructions
 // to agents via Discord or GitHub. Provisioned agents use these IDs in the
 // generated prompt so no operator ID is hardcoded in clem source.
@@ -446,10 +456,36 @@ func (ac *AgentConfig) validateExtensions(key string) error {
 		if mp.Name == "" || mp.Repo == "" {
 			return fmt.Errorf("agent %s: marketplace entry missing name or repo", key)
 		}
+		if !extensionNameRe.MatchString(mp.Name) {
+			return fmt.Errorf("agent %s: marketplace name %q contains invalid characters", key, mp.Name)
+		}
+		if !extensionRepoRe.MatchString(mp.Repo) {
+			return fmt.Errorf("agent %s: marketplace repo %q is not a valid owner/repo", key, mp.Repo)
+		}
+		if mp.Commit != "" && !commitHashRe.MatchString(mp.Commit) {
+			return fmt.Errorf("agent %s: marketplace commit %q is not a valid hex hash", key, mp.Commit)
+		}
+	}
+	for _, pl := range ac.Extensions.Plugins {
+		if pl.Name == "" || pl.Marketplace == "" {
+			return fmt.Errorf("agent %s: plugin entry missing name or marketplace", key)
+		}
+		if !extensionNameRe.MatchString(pl.Name) {
+			return fmt.Errorf("agent %s: plugin name %q contains invalid characters", key, pl.Name)
+		}
+		if !extensionNameRe.MatchString(pl.Marketplace) {
+			return fmt.Errorf("agent %s: plugin marketplace %q contains invalid characters", key, pl.Marketplace)
+		}
 	}
 	for _, sk := range ac.Extensions.Skills {
 		if sk.Name == "" || sk.Repo == "" {
 			return fmt.Errorf("agent %s: skill entry missing name or repo", key)
+		}
+		if !extensionNameRe.MatchString(sk.Name) {
+			return fmt.Errorf("agent %s: skill name %q contains invalid characters", key, sk.Name)
+		}
+		if !extensionRepoRe.MatchString(sk.Repo) {
+			return fmt.Errorf("agent %s: skill repo %q is not a valid owner/repo", key, sk.Repo)
 		}
 	}
 	for _, mcp := range ac.Extensions.MCPServers {

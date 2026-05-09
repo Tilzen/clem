@@ -761,17 +761,22 @@ func InstallMarketplace(username string, m config.MarketplaceConfig) error {
 	marketplaceDir := filepath.Join(home, ".claude", "plugins", "marketplaces", m.Name)
 	knownPath := filepath.Join(home, ".claude", "plugins", "known_marketplaces.json")
 	if _, err := os.Stat(marketplaceDir); os.IsNotExist(err) {
-		cmd := exec.Command("sudo", "-iu", username, "bash", "-c",
-			fmt.Sprintf("mkdir -p ~/.claude/plugins/marketplaces && git clone https://github.com/%s.git %s", m.Repo, marketplaceDir))
-		if out, err := cmd.CombinedOutput(); err != nil {
+		parentDir := filepath.Join(home, ".claude", "plugins", "marketplaces")
+		if out, err := exec.Command("sudo", "-iu", username, "mkdir", "-p", parentDir).CombinedOutput(); err != nil {
+			return fmt.Errorf("creating marketplace dir for %s: %w\n%s", username, err, out)
+		}
+		cloneURL := "https://github.com/" + m.Repo + ".git"
+		if out, err := exec.Command("sudo", "-iu", username, "git", "clone", cloneURL, marketplaceDir).CombinedOutput(); err != nil {
 			return fmt.Errorf("cloning marketplace %s for %s: %w\n%s", m.Name, username, err, out)
 		}
 	}
 	if m.Commit != "" {
-		cmd := exec.Command("sudo", "-iu", username, "bash", "-c",
-			fmt.Sprintf("git -C %s rev-parse HEAD | grep -q '^%s'", marketplaceDir, m.Commit))
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("marketplace %s HEAD does not match pinned commit %s for %s:\n%s", m.Name, m.Commit, username, out)
+		out, err := exec.Command("sudo", "-iu", username, "git", "-C", marketplaceDir, "rev-parse", "HEAD").CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("reading HEAD for marketplace %s: %w\n%s", m.Name, err, out)
+		}
+		if !strings.HasPrefix(strings.TrimSpace(string(out)), m.Commit) {
+			return fmt.Errorf("marketplace %s HEAD does not match pinned commit %s for %s: got %s", m.Name, m.Commit, username, strings.TrimSpace(string(out)))
 		}
 	}
 	var known map[string]json.RawMessage
@@ -802,17 +807,14 @@ func InstallMarketplace(username string, m config.MarketplaceConfig) error {
 
 // installPlugin installs and enables a plugin from the named marketplace. Idempotent.
 func installPlugin(username, pluginName, marketplaceName string) error {
-	cmd := exec.Command("sudo", "-iu", username, "bash", "-c",
-		fmt.Sprintf("claude plugin install %s@%s 2>&1; claude plugin enable %s@%s 2>&1; true",
-			pluginName, marketplaceName, pluginName, marketplaceName))
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("plugin %s@%s for %s: %w\n%s", pluginName, marketplaceName, username, err, out)
+	ref := pluginName + "@" + marketplaceName
+	installOut, _ := exec.Command("sudo", "-iu", username, "claude", "plugin", "install", ref).CombinedOutput()
+	if !strings.Contains(string(installOut), "Successfully installed plugin") && !strings.Contains(string(installOut), "already installed") {
+		return fmt.Errorf("plugin %s install did not confirm success for %s:\n%s", ref, username, installOut)
 	}
-	output := string(out)
-	if !(strings.Contains(output, "Successfully installed plugin") || strings.Contains(output, "already installed")) ||
-		!(strings.Contains(output, "Successfully enabled plugin") || strings.Contains(output, "already enabled")) {
-		return fmt.Errorf("plugin %s@%s install/enable did not confirm success for %s:\n%s", pluginName, marketplaceName, username, output)
+	enableOut, _ := exec.Command("sudo", "-iu", username, "claude", "plugin", "enable", ref).CombinedOutput()
+	if !strings.Contains(string(enableOut), "Successfully enabled plugin") && !strings.Contains(string(enableOut), "already enabled") {
+		return fmt.Errorf("plugin %s enable did not confirm success for %s:\n%s", ref, username, enableOut)
 	}
 	return nil
 }
@@ -822,9 +824,12 @@ func installPlugin(username, pluginName, marketplaceName string) error {
 func InstallSkill(username string, s config.SkillConfig) error {
 	skillDir := filepath.Join(fmt.Sprintf("/home/%s", username), ".claude", "skills", s.Name)
 	if _, err := os.Stat(skillDir); os.IsNotExist(err) {
-		cmd := exec.Command("sudo", "-iu", username, "bash", "-c",
-			fmt.Sprintf("mkdir -p ~/.claude/skills && git clone https://github.com/%s.git %s", s.Repo, skillDir))
-		if out, err := cmd.CombinedOutput(); err != nil {
+		parentDir := filepath.Join(fmt.Sprintf("/home/%s", username), ".claude", "skills")
+		if out, err := exec.Command("sudo", "-iu", username, "mkdir", "-p", parentDir).CombinedOutput(); err != nil {
+			return fmt.Errorf("creating skills dir for %s: %w\n%s", username, err, out)
+		}
+		cloneURL := "https://github.com/" + s.Repo + ".git"
+		if out, err := exec.Command("sudo", "-iu", username, "git", "clone", cloneURL, skillDir).CombinedOutput(); err != nil {
 			return fmt.Errorf("cloning skill %s for %s: %w\n%s", s.Name, username, err, out)
 		}
 	}
