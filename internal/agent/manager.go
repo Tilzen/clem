@@ -337,6 +337,9 @@ func ConfigureGit(username, homeDir, pubKey, gitName, gitEmail string) error {
 	}
 
 	commitEmail := username + "@clem"
+	if gitEmail != "" {
+		commitEmail = gitEmail
+	}
 	allowedSignersPath := filepath.Join(sshDir, "allowed_signers")
 	if err := os.WriteFile(allowedSignersPath, []byte(commitEmail+" "+pubKey+"\n"), 0644); err != nil {
 		return fmt.Errorf("writing allowed_signers: %w", err)

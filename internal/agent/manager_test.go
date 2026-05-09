@@ -796,8 +796,9 @@ func TestConfigureGit_WritesUserIdentity(t *testing.T) {
 	withStub(t)
 	dir := t.TempDir()
 	pubKey := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestPubKeyData testuser@clem"
+	gitEmail := "212849679+clauderesearch@users.noreply.github.com"
 
-	if err := ConfigureGit("testuser", dir, pubKey, "clauderesearch", "212849679+clauderesearch@users.noreply.github.com"); err != nil {
+	if err := ConfigureGit("testuser", dir, pubKey, "clauderesearch", gitEmail); err != nil {
 		t.Fatalf("ConfigureGit: %v", err)
 	}
 
@@ -809,8 +810,17 @@ func TestConfigureGit_WritesUserIdentity(t *testing.T) {
 	if !strings.Contains(gcStr, "\tname = clauderesearch") {
 		t.Errorf(".gitconfig missing name: %s", gcStr)
 	}
-	if !strings.Contains(gcStr, "\temail = 212849679+clauderesearch@users.noreply.github.com") {
+	if !strings.Contains(gcStr, "\temail = "+gitEmail) {
 		t.Errorf(".gitconfig missing email: %s", gcStr)
+	}
+
+	asData, err := os.ReadFile(filepath.Join(dir, ".ssh", "allowed_signers"))
+	if err != nil {
+		t.Fatalf("allowed_signers not written: %v", err)
+	}
+	asStr := string(asData)
+	if !strings.HasPrefix(asStr, gitEmail+" ") {
+		t.Errorf("allowed_signers principal should be gitEmail %q, got: %s", gitEmail, asStr)
 	}
 }
 
