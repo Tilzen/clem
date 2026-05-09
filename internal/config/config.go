@@ -417,6 +417,9 @@ func Load(path string) (*Config, error) {
 		if _, err := ac.IterationDuration(); err != nil {
 			return nil, fmt.Errorf("agent %s: %w", key, err)
 		}
+		if _, err := ac.ProviderEnv(); err != nil {
+			return nil, fmt.Errorf("agent %s: %w", key, err)
+		}
 		if ac.WebTerminalPort != 0 {
 			if ac.WebTerminalPort < 1024 || ac.WebTerminalPort > 65535 {
 				return nil, fmt.Errorf("agent %s: web_terminal_port must be 1024-65535, got %d", key, ac.WebTerminalPort)

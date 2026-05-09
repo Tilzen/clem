@@ -219,6 +219,7 @@ agents:
     name: "Lead"
     model: "llama3"
     provider: ollama
+    provider_url: "http://localhost:11434"
 `
 	path := writeYAML(t, yaml)
 	cfg, err := Load(path)
@@ -742,6 +743,63 @@ agents:
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for invalid effort value, got nil")
+	}
+}
+
+func TestLoad_ProviderUnknownRejectsAtLoad(t *testing.T) {
+	path := writeYAML(t, `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+agents:
+  worker:
+    name: "Worker"
+    model: "claude-sonnet-4-6"
+    provider: olaama
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unknown provider, got nil")
+	}
+}
+
+func TestLoad_ProviderOllamaMissingURLRejectsAtLoad(t *testing.T) {
+	path := writeYAML(t, `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+agents:
+  worker:
+    name: "Worker"
+    model: "llama3"
+    provider: ollama
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for ollama missing provider_url, got nil")
+	}
+}
+
+func TestLoad_ProviderOllamaWithURLAccepted(t *testing.T) {
+	path := writeYAML(t, `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+agents:
+  worker:
+    name: "Worker"
+    model: "llama3"
+    provider: ollama
+    provider_url: "http://localhost:11434"
+`)
+	if _, err := Load(path); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
