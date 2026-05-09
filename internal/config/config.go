@@ -220,9 +220,9 @@ type AgentConfig struct {
 	// full IDs (claude-sonnet-4-6). Empty = inherit main model.
 	SubagentModel string `yaml:"subagent_model"`
 	// Effort caps extended-thinking budget per session via Claude Code's
-	// effortLevel setting. Accepts "low", "medium", "high". Empty = use
-	// Claude Code's own default (currently medium). Lowering trims output
-	// tokens — the dominant cost driver in agent loops.
+	// effortLevel setting. Accepts "low", "medium", "high", "xhigh", "max".
+	// Empty = use Claude Code's own default (currently medium). Lowering trims
+	// output tokens — the dominant cost driver in agent loops.
 	Effort string `yaml:"effort"`
 	// GitName and GitEmail set the agent's git user identity during provision.
 	// Without these, commits are authored with whatever identity the OAuth login
@@ -425,6 +425,12 @@ func Load(path string) (*Config, error) {
 				return nil, fmt.Errorf("agents %s and %s have the same web_terminal_port %d", other, key, ac.WebTerminalPort)
 			}
 			usedPorts[ac.WebTerminalPort] = key
+		}
+		switch ac.Effort {
+		case "", "low", "medium", "high", "xhigh", "max":
+			// valid
+		default:
+			return nil, fmt.Errorf("agent %s: effort must be low, medium, high, xhigh, or max, got %q", key, ac.Effort)
 		}
 		ac.normalizeSubagentModel()
 		if err := ac.validateExtensions(key); err != nil {

@@ -693,3 +693,55 @@ agents:
 	}
 }
 
+func TestLoad_EffortValidValues(t *testing.T) {
+	for _, effort := range []string{"", "low", "medium", "high", "xhigh", "max"} {
+		yaml := `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+agents:
+  lead:
+    name: "Lead"
+    model: "claude-sonnet-4-6"
+    effort: ` + effort + "\n"
+		if effort == "" {
+			yaml = `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+agents:
+  lead:
+    name: "Lead"
+    model: "claude-sonnet-4-6"
+`
+		}
+		path := writeYAML(t, yaml)
+		if _, err := Load(path); err != nil {
+			t.Errorf("effort=%q: unexpected error: %v", effort, err)
+		}
+	}
+}
+
+func TestLoad_EffortInvalidRejects(t *testing.T) {
+	path := writeYAML(t, `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+agents:
+  lead:
+    name: "Lead"
+    model: "claude-sonnet-4-6"
+    effort: hight
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid effort value, got nil")
+	}
+}
+
