@@ -455,7 +455,7 @@ func EnsureSSHKey(username, homeDir string) (string, error) {
 // We write both. Without ~/.claude.json, fresh agents hit the "Security notes —
 // Press Enter" screen and the "Quick safety check: trust this folder?" prompt
 // before the runner can inject its prompt, causing lost first iterations.
-func WriteSettings(username, homeDir, effort string) error {
+func WriteSettings(username, homeDir, project, effort string) error {
 	claudeDir := filepath.Join(homeDir, ".claude")
 	if err := os.MkdirAll(claudeDir, 0755); err != nil {
 		return fmt.Errorf("creating .claude dir: %w", err)
@@ -484,7 +484,7 @@ func WriteSettings(username, homeDir, effort string) error {
 	// lastOnboardingVersion prevents the next claude upgrade from re-prompting.
 	// projects.<workdir>.hasTrustDialogAccepted dismisses the folder-trust
 	// dialog for the agent's working directory.
-	workDirKey := filepath.Join(homeDir, projectFromUsername(username))
+	workDirKey := filepath.Join(homeDir, project)
 	appState := fmt.Sprintf(`{
   "hasCompletedOnboarding": true,
   "lastOnboardingVersion": "99.0.0",
@@ -507,16 +507,6 @@ func WriteSettings(username, homeDir, effort string) error {
 	ChownPath(claudeDir, username)
 	ChownPath(appStatePath, username)
 	return nil
-}
-
-// projectFromUsername extracts the project name from a clem-provisioned OS
-// username of the form "<project>-<agentkey>". Used to locate the agent's
-// working directory for the per-project trust entry in ~/.claude.json.
-func projectFromUsername(username string) string {
-	if i := strings.LastIndex(username, "-"); i > 0 {
-		return username[:i]
-	}
-	return username
 }
 
 // InstallService writes and enables a systemd service for an agent.

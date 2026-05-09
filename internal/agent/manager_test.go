@@ -430,20 +430,21 @@ func writeTestableHook(t *testing.T, stubDiffCmd string) string {
 
 // --- Executor seam tests ---
 
-func TestProjectFromUsername(t *testing.T) {
-	cases := []struct {
-		in, want string
-	}{
-		{"myproject-ada", "myproject"},
-		{"clem-dev-ada", "clem-dev"},
-		{"nohyphen", "nohyphen"},
-		{"", ""},
+func TestWriteSettings_WorkdirKeyUsesProjectDirectly(t *testing.T) {
+	withStub(t)
+	dir := t.TempDir()
+	// Agent key "my-agent" contains a hyphen; project is "myproject".
+	// The workdir key in .claude.json must be homeDir/myproject, not homeDir/myproject-my.
+	if err := WriteSettings("myproject-my-agent", dir, "myproject", ""); err != nil {
+		t.Fatalf("WriteSettings: %v", err)
 	}
-	for _, tc := range cases {
-		got := projectFromUsername(tc.in)
-		if got != tc.want {
-			t.Errorf("projectFromUsername(%q) = %q, want %q", tc.in, got, tc.want)
-		}
+	data, err := os.ReadFile(filepath.Join(dir, ".claude.json"))
+	if err != nil {
+		t.Fatalf(".claude.json not written: %v", err)
+	}
+	wantKey := filepath.Join(dir, "myproject")
+	if !strings.Contains(string(data), wantKey) {
+		t.Errorf(".claude.json workdir key: want %q in\n%s", wantKey, data)
 	}
 }
 
@@ -508,7 +509,7 @@ func TestWriteSettings_WritesExpectedFiles(t *testing.T) {
 	dir := t.TempDir()
 	username := "testuser"
 
-	if err := WriteSettings(username, dir, ""); err != nil {
+	if err := WriteSettings(username, dir, "myproject", ""); err != nil {
 		t.Fatalf("WriteSettings: %v", err)
 	}
 
@@ -548,7 +549,7 @@ func TestWriteSettings_RendersEffortLevel(t *testing.T) {
 	withStub(t)
 	dir := t.TempDir()
 
-	if err := WriteSettings("testuser", dir, "low"); err != nil {
+	if err := WriteSettings("testuser", dir, "myproject", "low"); err != nil {
 		t.Fatalf("WriteSettings: %v", err)
 	}
 	settingsData, err := os.ReadFile(filepath.Join(dir, ".claude", "settings.json"))
