@@ -641,8 +641,8 @@ agents:
 
 func TestExpandVaultRefs(t *testing.T) {
 	secrets := map[string]string{
-		"DISCORD_TOKEN": "tok123",
-		"GH_TOKEN":      "ghp_abc",
+		"discord-lead.DISCORD_TOKEN": "tok123",
+		"github.GH_TOKEN":            "ghp_abc",
 	}
 	cases := []struct {
 		in   string
@@ -653,6 +653,28 @@ func TestExpandVaultRefs(t *testing.T) {
 		{"prefix-${vault:discord-lead.DISCORD_TOKEN}-suffix", "prefix-tok123-suffix"},
 		{"${vault:other.MISSING}", "${vault:other.MISSING}"},
 		{"no refs here", "no refs here"},
+	}
+	for _, tc := range cases {
+		if got := ExpandVaultRefs(tc.in, secrets); got != tc.want {
+			t.Errorf("ExpandVaultRefs(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestExpandVaultRefs_KeyCollision(t *testing.T) {
+	// Two vaults share the same key name; ExpandVaultRefs must resolve each ref
+	// to its correct vault rather than silently delivering the wrong value.
+	secrets := map[string]string{
+		"github.API_KEY": "github-token",
+		"openai.API_KEY": "openai-token",
+	}
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"${vault:github.API_KEY}", "github-token"},
+		{"${vault:openai.API_KEY}", "openai-token"},
+		{"${vault:other.API_KEY}", "${vault:other.API_KEY}"},
 	}
 	for _, tc := range cases {
 		if got := ExpandVaultRefs(tc.in, secrets); got != tc.want {

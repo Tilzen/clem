@@ -115,10 +115,16 @@ func WriteEnvFile(username, homeDir string, secrets map[string]string) error {
 
 	var sb strings.Builder
 	for k, v := range secrets {
+		// Strip vault-name prefix ("vaultName.keyName" → "keyName") so the
+		// exported name is the bare secret key. Keys without a dot pass through.
+		envKey := k
+		if i := strings.IndexByte(k, '.'); i >= 0 {
+			envKey = k[i+1:]
+		}
 		// Single-quote the value so bash treats it as fully literal.
 		// Only ' needs escaping: end the quoted string, append literal ', reopen.
 		escaped := strings.ReplaceAll(v, "'", `'\''`)
-		sb.WriteString(fmt.Sprintf("export %s='%s'\n", k, escaped))
+		sb.WriteString(fmt.Sprintf("export %s='%s'\n", envKey, escaped))
 	}
 
 	if err := os.WriteFile(envPath, []byte(sb.String()), 0600); err != nil {
@@ -411,14 +417,29 @@ func InstallGitHooks(username, homeDir string) error {
 	return nil
 }
 
+// flatSecret looks up a bare key in a vault-qualified secrets map
+// ("vaultName.keyName" format). Returns the value for the first matching key
+// suffix; returns "" if not found.
+func flatSecret(secrets map[string]string, key string) string {
+	for k, v := range secrets {
+		if k == key {
+			return v
+		}
+		if i := strings.IndexByte(k, '.'); i >= 0 && k[i+1:] == key {
+			return v
+		}
+	}
+	return ""
+}
+
 // WriteWranglerConfig writes a wrangler OAuth config for the agent if the
 // matching env vars are present in the secrets map. Idempotent — safe to call
 // every provision. The wrangler binary auto-refreshes the OAuth token using
 // the refresh token, so this stays valid as long as the refresh token does.
 func WriteWranglerConfig(username, homeDir string, secrets map[string]string) error {
-	oauth := secrets["WRANGLER_OAUTH_TOKEN"]
-	refresh := secrets["WRANGLER_REFRESH_TOKEN"]
-	expiration := secrets["WRANGLER_EXPIRATION"]
+	oauth := flatSecret(secrets, "WRANGLER_OAUTH_TOKEN")
+	refresh := flatSecret(secrets, "WRANGLER_REFRESH_TOKEN")
+	expiration := flatSecret(secrets, "WRANGLER_EXPIRATION")
 	if oauth == "" || refresh == "" {
 		return nil // not configured for this agent
 	}

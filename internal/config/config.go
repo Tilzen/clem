@@ -116,12 +116,13 @@ type PermissionsConfig struct {
 	Deny []string `yaml:"deny"`
 }
 
-// ExpandVaultRefs replaces ${vault:BUCKET.KEY} refs in s using the flat
-// secrets map from vault.DecryptForAgent. Unresolvable refs are left as-is.
+// ExpandVaultRefs replaces ${vault:BUCKET.KEY} refs in s using the qualified
+// secrets map from vault.DecryptForAgent (keys are "vaultName.keyName").
+// Unresolvable refs are left as-is.
 func ExpandVaultRefs(s string, secrets map[string]string) string {
 	return vaultRefRe.ReplaceAllStringFunc(s, func(match string) string {
 		m := vaultRefRe.FindStringSubmatch(match)
-		if v, ok := secrets[m[2]]; ok {
+		if v, ok := secrets[m[1]+"."+m[2]]; ok {
 			return v
 		}
 		return match

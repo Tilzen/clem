@@ -88,8 +88,9 @@ func runProvision(cmd *cobra.Command, args []string) error {
 				fmt.Println("  skipping .env — run clem vault init and set secrets first")
 			}
 		} else {
-			merged := make(map[string]string, len(secrets)+len(providerEnv))
-			for k, v := range secrets {
+			flatSecrets := vault.FlatSecrets(secrets)
+			merged := make(map[string]string, len(flatSecrets)+len(providerEnv))
+			for k, v := range flatSecrets {
 				merged[k] = v
 			}
 			for k, v := range providerEnv {
@@ -103,11 +104,11 @@ func runProvision(cmd *cobra.Command, args []string) error {
 			// If wrangler credentials are present, write the wrangler config file
 			if err := agent.WriteWranglerConfig(osUser, homeDir, secrets); err != nil {
 				fmt.Printf("  warning: writing wrangler config: %v\n", err)
-			} else if secrets["WRANGLER_OAUTH_TOKEN"] != "" {
+			} else if flatSecrets["WRANGLER_OAUTH_TOKEN"] != "" {
 				fmt.Printf("  wrote wrangler config for %s\n", osUser)
 			}
 
-			ghToken = secrets["GH_TOKEN"]
+			ghToken = flatSecrets["GH_TOKEN"]
 			if ghToken != "" && ac.GitEmail == "" {
 				fmt.Printf("  warning: agent %s has GH_TOKEN but no git_email in clem.yaml — commits may leak operator identity\n", agentKey)
 			}

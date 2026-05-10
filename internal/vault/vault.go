@@ -258,11 +258,28 @@ func DecryptForAgent(agentKey string, vaultNames []string) (map[string]string, e
 			}
 			parts := strings.SplitN(line, "=", 2)
 			if len(parts) == 2 {
-				result[parts[0]] = parts[1]
+				result[vaultName+"."+parts[0]] = parts[1]
 			}
 		}
 	}
 	return result, nil
+}
+
+// FlatSecrets strips the vault-name prefix from keys returned by DecryptForAgent,
+// producing a map keyed by bare secret name. When two vaults share a key name,
+// the last entry in iteration order wins (same as the previous flat behaviour).
+// Use this for shell .env exports and direct by-name lookups; use the qualified
+// map for ExpandVaultRefs so vault-name disambiguation is preserved.
+func FlatSecrets(secrets map[string]string) map[string]string {
+	flat := make(map[string]string, len(secrets))
+	for k, v := range secrets {
+		if i := strings.IndexByte(k, '.'); i >= 0 {
+			flat[k[i+1:]] = v
+		} else {
+			flat[k] = v
+		}
+	}
+	return flat
 }
 
 func decryptLegacyAgent(agentKey, decrypted string) (map[string]string, error) {
