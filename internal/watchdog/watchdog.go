@@ -122,13 +122,13 @@ check_agent() {
 
 check_oom() {
     local marker="$COOLDOWN_DIR/oom.last"
-    local since
+    local since new_ts
+    new_ts=$(date +%s)
     if [ -f "$marker" ]; then
         since="@$(cat "$marker")"
     else
         since="5 minutes ago"
     fi
-    date +%s > "$marker"
 
     local hits
     hits=$(journalctl --since "$since" --no-pager 2>/dev/null \
@@ -140,6 +140,7 @@ check_oom() {
         mem=$(free -h | awk '/^Mem:/ {printf "%s/%s", $3, $2} /^Swap:/ {printf " swap=%s/%s", $3, $2}')
         send_alert "🔥 clem/$PROJECT OOM-kill detected (last 5min): $hits — RAM $mem"
     fi
+    echo "$new_ts" > "$marker"
 }
 
 {{.AgentChecks}}

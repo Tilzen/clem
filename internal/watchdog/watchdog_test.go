@@ -76,4 +76,12 @@ func TestGenerateScript_OOMCheckPresent(t *testing.T) {
 	if defIdx == -1 || callIdx == -1 || callIdx <= defIdx {
 		t.Errorf("check_oom must be defined and then invoked (def=%d call=%d)", defIdx, callIdx)
 	}
+
+	// marker must be written after the journalctl scan to avoid silently
+	// dropping events on interruption between the two lines.
+	markerWriteIdx := strings.Index(s, `echo "$new_ts" > "$marker"`)
+	journalIdx := strings.Index(s, `journalctl --since "$since" --no-pager`)
+	if markerWriteIdx == -1 || journalIdx == -1 || markerWriteIdx <= journalIdx {
+		t.Errorf("marker write must appear after journalctl scan (markerWrite=%d journalctl=%d)", markerWriteIdx, journalIdx)
+	}
 }
