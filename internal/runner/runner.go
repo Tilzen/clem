@@ -248,10 +248,22 @@ print(json.dumps(cfg, indent=2))
 
 SLEEP_ACTIVE={{.SleepActive}}
 SLEEP_NIGHT={{.SleepNight}}
+MAX_CLAUDE_MD_BYTES=12288
+MAX_LESSONS_MESSAGES=25
 
 while true; do
     START=$(date +%s)
     PROMPT='{{.Prompt}}'
+
+    # Guard: CLAUDE.local.md too large (token waste)
+    if [ -f "$WORKDIR/CLAUDE.local.md" ]; then
+        SIZE=$(stat -c %s "$WORKDIR/CLAUDE.local.md" 2>/dev/null || echo 0)
+        if (( SIZE > MAX_CLAUDE_MD_BYTES )); then
+            log "WARNING: CLAUDE.local.md is ${SIZE} bytes (max ${MAX_CLAUDE_MD_BYTES}) — alerting"
+            source "$HOME/.env" 2>/dev/null
+            {{.AlertCurl}}
+        fi
+    fi
 
     log "Starting {{.AgentName}} (opencode, fresh session)"
     MODEL_ARG=""

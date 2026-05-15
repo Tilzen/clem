@@ -439,6 +439,29 @@ func TestGenerateService_HardeningUsesAbsoluteHomePath(t *testing.T) {
 	}
 }
 
+func TestGenerate_OpencodeRunnerHasClaudeMdGuard(t *testing.T) {
+	cfg := baseCfg("lead", config.AgentConfig{
+		Name:      "Lead",
+		Runtime:   "opencode",
+		Model:     "nemotron-3-nano:4b",
+		Iteration: "1m",
+		Prompt:    "do the thing",
+	})
+	out := Generate(cfg, "lead")
+
+	for _, want := range []string{
+		"MAX_CLAUDE_MD_BYTES=12288",
+		"MAX_LESSONS_MESSAGES=25",
+		`if [ -f "$WORKDIR/CLAUDE.local.md" ]`,
+		"SIZE > MAX_CLAUDE_MD_BYTES",
+		"WARNING: CLAUDE.local.md is ${SIZE} bytes",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("opencode runner missing CLAUDE.local.md guard: expected %q\nfull output:\n%s", want, out)
+		}
+	}
+}
+
 func TestGenerateService_MissingUserFails(t *testing.T) {
 	orig := userHomeLookup
 	userHomeLookup = func(username string) (string, error) {
