@@ -101,10 +101,11 @@ func Set(vaultName, keyval string) error {
 	}
 
 	// sops --set '["vaults"]["<vaultName>"]["KEY"] "value"' secrets.sops.yaml
+	// Escape \ before " so jq interprets the value as a literal string.
 	setExpr := fmt.Sprintf(`["vaults"]["%s"]["%s"] "%s"`,
-		strings.ReplaceAll(vaultName, `"`, `\"`),
-		strings.ReplaceAll(key, `"`, `\"`),
-		strings.ReplaceAll(value, `"`, `\"`),
+		jqEscape(vaultName),
+		jqEscape(key),
+		jqEscape(value),
 	)
 	out, err := exec.Command("sops", "--set", setExpr, secretsFile).CombinedOutput()
 	if err != nil {
@@ -365,6 +366,14 @@ func ensureSops() error {
 		return fmt.Errorf("%s not found — run 'clem vault set' to create it", secretsFile)
 	}
 	return nil
+}
+
+// jqEscape escapes a string for use in a sops --set jq expression string literal.
+// Backslashes must be escaped before quotes to avoid double-processing.
+func jqEscape(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return s
 }
 
 // ensureSopsBin checks only that the sops binary exists, not the secrets file.

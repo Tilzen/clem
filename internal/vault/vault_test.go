@@ -145,6 +145,45 @@ func TestSet_RejectsMalformedKeyval(t *testing.T) {
 	}
 }
 
+func TestJqEscape(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{`simple`, `simple`},
+		{`with"quote`, `with\"quote`},
+		{`back\slash`, `back\\slash`},
+		{`C:\Users\token`, `C:\\Users\\token`},
+		{`\n literal`, `\\n literal`},
+		{`both\"`, `both\\\"`},
+	}
+	for _, c := range cases {
+		got := jqEscape(c.input)
+		if got != c.want {
+			t.Errorf("jqEscape(%q) = %q, want %q", c.input, got, c.want)
+		}
+	}
+}
+
+func TestSet_BackslashInValue(t *testing.T) {
+	requireSopsAndAge(t)
+	cleanup := setupVaultDir(t)
+	defer cleanup()
+
+	if err := Set("myvault", `PATH=C:\Users\token`); err != nil {
+		t.Fatalf("Set with backslash: %v", err)
+	}
+
+	secrets, err := DecryptForAgent("", []string{"myvault"})
+	if err != nil {
+		t.Fatalf("DecryptForAgent: %v", err)
+	}
+	want := `C:\Users\token`
+	if got := secrets["myvault.PATH"]; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 // requireAgeKeygen skips if age-keygen is not on PATH.
 func requireAgeKeygen(t *testing.T) {
 	t.Helper()
