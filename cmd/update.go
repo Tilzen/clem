@@ -81,7 +81,9 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolving current binary path: %w", err)
 	}
-	dst, _ = filepath.EvalSymlinks(dst)
+	if resolved, err := filepath.EvalSymlinks(dst); err == nil {
+		dst = resolved
+	}
 
 	if err := os.Rename(tmpPath, dst); err != nil {
 		return fmt.Errorf("replacing %s (may need sudo): %w", dst, err)
