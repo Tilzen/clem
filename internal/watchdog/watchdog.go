@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/jahwag/clem/internal/config"
+	"github.com/jahwag/clem/internal/coordination"
 )
 
 const watchdogScript = `#!/bin/bash
@@ -18,20 +19,15 @@ COOLDOWN_SECONDS=300
 
 mkdir -p "$COOLDOWN_DIR"
 
-# Discord token sourced from orchestrator agent's .env
-DISCORD_WEBHOOK=""
+# Chat backend token sourced from orchestrator agent's .env
 {{.EnvSource}}
 
 send_alert() {
     local msg="$1"
-    if [ -n "$DISCORD_TOKEN" ] && [ -n "{{.AlertChannel}}" ]; then
-        local body
-        body=$(python3 -c "import json,sys; print(json.dumps({'content':sys.argv[1]}))" "$msg")
-        curl -s -X POST \
-            "https://discord.com/api/v10/channels/{{.AlertChannel}}/messages" \
-            -H "Authorization: Bot $DISCORD_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$body" > /dev/null 2>&1
+    local safe_msg
+    safe_msg=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1])[1:-1])" "$msg" 2>/dev/null) || safe_msg=$msg
+    if [ -n "${{.TokenEnvVar}}" ] && [ -n "{{.AlertChannel}}" ]; then
+        {{.AlertCurl}}
     fi
     echo "$(date -Iseconds) ALERT: $msg"
 }
@@ -175,6 +171,8 @@ type watchdogParams struct {
 	Project      string
 	EnvSource    string
 	AlertChannel string
+	TokenEnvVar  string
+	AlertCurl    string
 	AgentChecks  string
 }
 
@@ -202,6 +200,10 @@ func GenerateScript(cfg *config.Config) string {
 	envSource := fmt.Sprintf(`[ -f "/home/%s/.env" ] && source "/home/%s/.env"`, orchestratorUser, orchestratorUser)
 
 	alertChannel := cfg.Coordination.Channels["alerts"]
+	backend, _ := coordination.Known(cfg.Coordination.Backend) // validated at load time
+	// $msg is the bash local set by send_alert; AlertTemplate expands it at
+	// runtime so the curl body matches the per-backend wire format.
+	alertCurl := fmt.Sprintf(backend.AlertTemplate, alertChannel, "$safe_msg")
 
 	var checks strings.Builder
 	for _, key := range keys {
@@ -214,6 +216,8 @@ func GenerateScript(cfg *config.Config) string {
 		Project:      cfg.Project,
 		EnvSource:    envSource,
 		AlertChannel: alertChannel,
+		TokenEnvVar:  backend.TokenEnvVar,
+		AlertCurl:    alertCurl,
 		AgentChecks:  strings.TrimRight(checks.String(), "\n"),
 	}
 
@@ -221,6 +225,8 @@ func GenerateScript(cfg *config.Config) string {
 		"{{.Project}}", p.Project,
 		"{{.EnvSource}}", p.EnvSource,
 		"{{.AlertChannel}}", p.AlertChannel,
+		"{{.TokenEnvVar}}", p.TokenEnvVar,
+		"{{.AlertCurl}}", p.AlertCurl,
 		"{{.AgentChecks}}", p.AgentChecks,
 	)
 	return r.Replace(watchdogScript)
