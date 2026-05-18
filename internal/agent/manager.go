@@ -331,11 +331,29 @@ done
 exit 0
 `, PrePushAllowSecretMarker, SecretPatternRegex, SecretCodePatternRegex, UnicodeTrapRegex, PrePushAllowSecretMarker)
 
-// ConfigureGit writes SSH commit-signing configuration and optionally the git
-// user identity to the agent's ~/.gitconfig. Idempotent — safe to call every
-// provision. pubKey is the agent's ed25519 public key (returned by EnsureSSHKey).
-// gitName and gitEmail, when non-empty, set git user.name / user.email; existing
-// values are preserved (operator-set identity is never overwritten).
+// stripGitConfigKey removes every line of `content` whose leading text is
+// "\t<key> = ". Used to clear stale name/email entries before re-writing them
+// with the current configured values.
+func stripGitConfigKey(content, key string) string {
+	prefix := "\t" + key + " = "
+	lines := strings.Split(content, "\n")
+	out := lines[:0]
+	for _, line := range lines {
+		if strings.HasPrefix(line, prefix) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+// ConfigureGit writes SSH commit-signing configuration and the git user
+// identity to the agent's ~/.gitconfig. Idempotent — safe to call every
+// provision. pubKey is the agent's ed25519 public key (returned by
+// EnsureSSHKey). When gitName / gitEmail are non-empty, any pre-existing
+// "\tname = " / "\temail = " line is stripped and replaced so clem.yaml stays
+// authoritative across re-provisions; empty inputs leave the existing value
+// untouched.
 func ConfigureGit(username, homeDir, pubKey, gitName, gitEmail string) error {
 	sshDir := filepath.Join(homeDir, ".ssh")
 	if err := os.MkdirAll(sshDir, 0700); err != nil {
@@ -366,11 +384,17 @@ func ConfigureGit(username, homeDir, pubKey, gitName, gitEmail string) error {
 			signingKey, allowedSignersPath,
 		)
 	}
+	if gitName != "" {
+		content = stripGitConfigKey(content, "name")
+	}
+	if gitEmail != "" {
+		content = stripGitConfigKey(content, "email")
+	}
 	var identityLines []string
-	if gitName != "" && !strings.Contains(content, "\tname = ") {
+	if gitName != "" {
 		identityLines = append(identityLines, "\tname = "+gitName)
 	}
-	if gitEmail != "" && !strings.Contains(content, "\temail = ") {
+	if gitEmail != "" {
 		identityLines = append(identityLines, "\temail = "+gitEmail)
 	}
 	if len(identityLines) > 0 {

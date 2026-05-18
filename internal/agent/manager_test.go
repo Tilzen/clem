@@ -824,13 +824,13 @@ func TestConfigureGit_WritesUserIdentity(t *testing.T) {
 	}
 }
 
-func TestConfigureGit_PreservesExistingIdentity(t *testing.T) {
+func TestConfigureGit_OverwritesExistingIdentity(t *testing.T) {
 	withStub(t)
 	dir := t.TempDir()
 	pubKey := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestPubKeyData testuser@clem"
 
-	// pre-existing operator-set identity
-	existing := "[user]\n\tname = operator\n\temail = operator@example.com\n"
+	// pre-existing stale identity (e.g. from a prior provision)
+	existing := "[user]\n\tname = old-name\n\temail = old@example.com\n"
 	if err := os.WriteFile(filepath.Join(dir, ".gitconfig"), []byte(existing), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -841,11 +841,42 @@ func TestConfigureGit_PreservesExistingIdentity(t *testing.T) {
 
 	gcData, _ := os.ReadFile(filepath.Join(dir, ".gitconfig"))
 	gcStr := string(gcData)
-	if strings.Contains(gcStr, "clauderesearch") {
-		t.Errorf("ConfigureGit overwrote operator name: %s", gcStr)
+	if !strings.Contains(gcStr, "\tname = clauderesearch") {
+		t.Errorf("ConfigureGit did not write new name: %s", gcStr)
 	}
-	if strings.Contains(gcStr, "bot@example.com") {
-		t.Errorf("ConfigureGit overwrote operator email: %s", gcStr)
+	if !strings.Contains(gcStr, "\temail = bot@example.com") {
+		t.Errorf("ConfigureGit did not write new email: %s", gcStr)
+	}
+	if strings.Contains(gcStr, "old-name") {
+		t.Errorf("stale name was not removed: %s", gcStr)
+	}
+	if strings.Contains(gcStr, "old@example.com") {
+		t.Errorf("stale email was not removed: %s", gcStr)
+	}
+}
+
+func TestConfigureGit_LeavesIdentityWhenInputsEmpty(t *testing.T) {
+	withStub(t)
+	dir := t.TempDir()
+	pubKey := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestPubKeyData testuser@clem"
+
+	// operator-set identity present; clem.yaml supplies no git_name / git_email
+	existing := "[user]\n\tname = operator\n\temail = operator@example.com\n"
+	if err := os.WriteFile(filepath.Join(dir, ".gitconfig"), []byte(existing), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ConfigureGit("testuser", dir, pubKey, "", ""); err != nil {
+		t.Fatalf("ConfigureGit: %v", err)
+	}
+
+	gcData, _ := os.ReadFile(filepath.Join(dir, ".gitconfig"))
+	gcStr := string(gcData)
+	if !strings.Contains(gcStr, "\tname = operator") {
+		t.Errorf("operator name was removed despite empty input: %s", gcStr)
+	}
+	if !strings.Contains(gcStr, "\temail = operator@example.com") {
+		t.Errorf("operator email was removed despite empty input: %s", gcStr)
 	}
 }
 
