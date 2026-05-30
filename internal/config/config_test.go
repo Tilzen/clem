@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -1269,5 +1270,295 @@ agents:
 `)
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected error: vault_broker + egress containment on same agent")
+	}
+}
+
+// --- mcp_sidecars (privileged sidecar) schema/validation ---
+
+func sidecarYAML(block string) string {
+	return `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+operator:
+  discord_ids: ["277434478803156993"]
+` + block + `
+agents:
+  lead:
+    name: "Lead"
+    model: "claude-sonnet-4-6"
+    sidecars: [es-ro]
+`
+}
+
+func TestLoad_Sidecar_Valid(t *testing.T) {
+	cfg, err := Load(writeYAML(t, sidecarYAML(`mcp_sidecars:
+  servers:
+    - name: es-ro
+      identity: shared
+      command: /usr/local/bin/clem-mcp-http
+      secrets: [ES_USER, ES_PASSWORD]
+      secrets_vault: clem-vault`)))
+	if err != nil {
+		t.Fatalf("valid sidecar should load: %v", err)
+	}
+	s := cfg.MCPSidecars.Servers[0]
+	if cfg.MCPSidecars.SystemUserOrDefault() != "clem-mcp" || cfg.MCPSidecars.BasePortOrDefault() != 14500 {
+		t.Errorf("defaults wrong: %q %d", cfg.MCPSidecars.SystemUserOrDefault(), cfg.MCPSidecars.BasePortOrDefault())
+	}
+	if s.IdentityKind() != "shared" || s.TransportKind() != "http" || s.ToolName() != "es-ro" {
+		t.Errorf("normalizers wrong: %q %q %q", s.IdentityKind(), s.TransportKind(), s.ToolName())
+	}
+}
+
+func TestLoad_Sidecar_UndefinedSubscriptionRejected(t *testing.T) {
+	// agent subscribes to es-ro but no servers defined
+	if _, err := Load(writeYAML(t, sidecarYAML(``))); err == nil {
+		t.Fatal("expected error: agent subscribes to undefined sidecar")
+	}
+}
+
+func TestLoad_Sidecar_RequiresCommandAndSecret(t *testing.T) {
+	if _, err := Load(writeYAML(t, sidecarYAML(`mcp_sidecars:
+  servers:
+    - name: es-ro
+      command: /bin/x`))); err == nil {
+		t.Fatal("expected error: sidecar with no secrets")
+	}
+	if _, err := Load(writeYAML(t, sidecarYAML(`mcp_sidecars:
+  servers:
+    - name: es-ro
+      secrets: [ES_USER]`))); err == nil {
+		t.Fatal("expected error: sidecar with no command")
+	}
+}
+
+func TestLoad_Sidecar_BadIdentityRejected(t *testing.T) {
+	if _, err := Load(writeYAML(t, sidecarYAML(`mcp_sidecars:
+  servers:
+    - name: es-ro
+      identity: wat
+      command: /bin/x
+      secrets: [ES_USER]`))); err == nil {
+		t.Fatal("expected error: bad identity")
+	}
+}
+
+func TestLoad_Sidecar_PerAgentAndToolOverride(t *testing.T) {
+	cfg, err := Load(writeYAML(t, sidecarYAML(`mcp_sidecars:
+  servers:
+    - name: es-ro
+      identity: per-agent
+      command: /bin/x
+      secrets: [DISCORD_TOKEN]
+      tool: discord-gw`)))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	s := cfg.MCPSidecars.Servers[0]
+	if s.IdentityKind() != "per-agent" || s.ToolName() != "discord-gw" {
+		t.Errorf("got %q / %q", s.IdentityKind(), s.ToolName())
+	}
+}
+
+func TestLoad_Sidecar_RelativeCommandRejected(t *testing.T) {
+	if _, err := Load(writeYAML(t, sidecarYAML(`mcp_sidecars:
+  servers:
+    - name: es-ro
+      command: clem-mcp-http
+      secrets: [ES_USER]`))); err == nil {
+		t.Fatal("expected error: command must be absolute path")
+	}
+}
+
+func TestLoad_Sidecar_ToolNameCollidesWithBuiltin(t *testing.T) {
+	for _, builtin := range []string{"discord-bot", "slack-mcp", "social", "browser-render"} {
+		if _, err := Load(writeYAML(t, sidecarYAML(`mcp_sidecars:
+  servers:
+    - name: es-ro
+      command: /bin/x
+      secrets: [ES_USER]
+      tool: `+builtin))); err == nil {
+			t.Fatalf("expected error: tool %q collides with builtin", builtin)
+		}
+	}
+}
+
+func TestLoad_Sidecar_BadToolNameRejected(t *testing.T) {
+	if _, err := Load(writeYAML(t, sidecarYAML(`mcp_sidecars:
+  servers:
+    - name: es-ro
+      command: /bin/x
+      secrets: [ES_USER]
+      tool: ES_RO`))); err == nil {
+		t.Fatal("expected error: tool name must match slug pattern")
+	}
+}
+
+func TestLoad_Sidecar_BadSecretKeyRejected(t *testing.T) {
+	if _, err := Load(writeYAML(t, sidecarYAML(`mcp_sidecars:
+  servers:
+    - name: es-ro
+      command: /bin/x
+      secrets: ["es-user"]`))); err == nil {
+		t.Fatal("expected error: secret key with hyphen is not a valid env-var name")
+	}
+}
+
+// portYAML builds a config with one sidecar and one agent whose web_terminal_port
+// and the sidecar base_port can be set to provoke overflow/collision.
+func portYAML(basePort, webPort int, identity string) string {
+	return fmt.Sprintf(`
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+operator:
+  discord_ids: ["277434478803156993"]
+mcp_sidecars:
+  base_port: %d
+  servers:
+    - name: es-ro
+      identity: %s
+      command: /bin/x
+      secrets: [ES_USER]
+      secrets_vault: infra
+agents:
+  lead:
+    name: "Lead"
+    model: "claude-sonnet-4-6"
+    web_terminal_port: %d
+    sidecars: [es-ro]
+  worker:
+    name: "Worker"
+    model: "claude-sonnet-4-6"
+    sidecars: [es-ro]
+`, basePort, identity, webPort)
+}
+
+func TestLoad_Sidecar_PortOverflow(t *testing.T) {
+	// per-agent sidecar with 2 subscribers at base_port 65535 → 2 listeners overflow.
+	if _, err := Load(writeYAML(t, portYAML(65535, 7681, "per-agent"))); err == nil {
+		t.Fatal("expected error: sidecar listener ports overflow past 65535")
+	}
+}
+
+func TestLoad_Sidecar_PortCollidesWithWebTerminal(t *testing.T) {
+	// shared sidecar at base_port 14500, agent web_terminal_port 14500 → collision.
+	if _, err := Load(writeYAML(t, portYAML(14500, 14500, "shared"))); err == nil {
+		t.Fatal("expected error: sidecar port collides with web_terminal_port")
+	}
+}
+
+func TestLoad_Sidecar_SharedRequiresSecretsVault(t *testing.T) {
+	if _, err := Load(writeYAML(t, sidecarYAML(`mcp_sidecars:
+  servers:
+    - name: es-ro
+      command: /bin/x
+      secrets: [ES_USER]`))); err == nil {
+		t.Fatal("expected error: shared sidecar requires secrets_vault")
+	}
+}
+
+func TestValidateMCPSidecars_OpencodeRejected(t *testing.T) {
+	cfg := &Config{
+		Project: "t",
+		MCPSidecars: MCPSidecarsConfig{Servers: []SidecarServer{
+			{Name: "es-ro", Identity: "shared", Command: "/bin/x", Secrets: []string{"K"}, SecretsVault: "infra"},
+		}},
+		Agents: map[string]AgentConfig{
+			"lead": {Name: "L", Runtime: "opencode", Sidecars: []string{"es-ro"}},
+		},
+	}
+	if err := cfg.validateMCPSidecars(); err == nil {
+		t.Fatal("expected error: sidecars unsupported with runtime opencode")
+	}
+}
+
+func TestValidateMCPSidecars_AgentVaultPortCollision(t *testing.T) {
+	cfg := &Config{
+		Project: "t",
+		Vault:   VaultBackend{Backend: "agent-vault"},
+		MCPSidecars: MCPSidecarsConfig{BasePort: 14321, Servers: []SidecarServer{
+			{Name: "es-ro", Identity: "shared", Command: "/bin/x", Secrets: []string{"K"}, SecretsVault: "infra"},
+		}},
+		Agents: map[string]AgentConfig{"lead": {Name: "L", Sidecars: []string{"es-ro"}}},
+	}
+	if err := cfg.validateMCPSidecars(); err == nil {
+		t.Fatal("expected error: sidecar port collides with agent-vault management port")
+	}
+}
+
+func TestSidecarListeners_SharedAndUnsubscribed(t *testing.T) {
+	cfg := &Config{
+		Project:     "myteam",
+		MCPSidecars: MCPSidecarsConfig{BasePort: 14500, Servers: []SidecarServer{
+			{Name: "es-ro", Identity: "shared", Command: "/bin/x", Secrets: []string{"K"}},
+			{Name: "unused", Identity: "shared", Command: "/bin/x", Secrets: []string{"K"}},
+		}},
+		Agents: map[string]AgentConfig{
+			"worker": {Name: "W", Sidecars: []string{"es-ro"}},
+			"lead":   {Name: "L", Sidecars: []string{"es-ro"}},
+		},
+	}
+	ls := cfg.SidecarListeners()
+	if len(ls) != 1 { // "unused" has no subscriber → no listener
+		t.Fatalf("want 1 listener, got %d", len(ls))
+	}
+	if ls[0].Port != 14500 || ls[0].AgentKey != "" {
+		t.Errorf("shared listener wrong: port=%d agentKey=%q", ls[0].Port, ls[0].AgentKey)
+	}
+	if len(ls[0].Subscribers) != 2 || ls[0].Subscribers[0] != "lead" || ls[0].Subscribers[1] != "worker" {
+		t.Errorf("subscribers not sorted/complete: %v", ls[0].Subscribers)
+	}
+}
+
+func TestSidecarListeners_PerAgentOnePortEach(t *testing.T) {
+	cfg := &Config{
+		Project:     "myteam",
+		MCPSidecars: MCPSidecarsConfig{BasePort: 14500, Servers: []SidecarServer{
+			{Name: "disc", Identity: "per-agent", Command: "/bin/x", Secrets: []string{"DISCORD_TOKEN"}},
+		}},
+		Agents: map[string]AgentConfig{
+			"worker": {Name: "W", Sidecars: []string{"disc"}},
+			"lead":   {Name: "L", Sidecars: []string{"disc"}},
+		},
+	}
+	ls := cfg.SidecarListeners()
+	if len(ls) != 2 {
+		t.Fatalf("want 2 per-agent listeners, got %d", len(ls))
+	}
+	// Sorted subscribers: lead@14500, worker@14501.
+	if ls[0].AgentKey != "lead" || ls[0].Port != 14500 {
+		t.Errorf("listener[0] = %q@%d", ls[0].AgentKey, ls[0].Port)
+	}
+	if ls[1].AgentKey != "worker" || ls[1].Port != 14501 {
+		t.Errorf("listener[1] = %q@%d", ls[1].AgentKey, ls[1].Port)
+	}
+}
+
+func TestSidecarServiceNames(t *testing.T) {
+	c := &Config{Project: "cdev"}
+	if got := c.SidecarServiceName("es-ro", ""); got != "clem-mcp-cdev-es-ro.service" {
+		t.Errorf("shared service name: %q", got)
+	}
+	if got := c.SidecarServiceName("disc", "lead"); got != "clem-mcp-cdev-disc-lead.service" {
+		t.Errorf("per-agent service name: %q", got)
+	}
+	if got := c.SidecarNftablesServiceName(); got != "clem-sidecar-nft-cdev.service" {
+		t.Errorf("sidecar nft service name: %q", got)
+	}
+}
+
+func TestSidecarPort_Deterministic(t *testing.T) {
+	m := MCPSidecarsConfig{BasePort: 14500}
+	if m.SidecarPort(0) != 14500 || m.SidecarPort(3) != 14503 {
+		t.Errorf("got %d %d", m.SidecarPort(0), m.SidecarPort(3))
+	}
+	if (MCPSidecarsConfig{}).SidecarPort(0) != 14500 {
+		t.Errorf("default base wrong: %d", (MCPSidecarsConfig{}).SidecarPort(0))
 	}
 }
