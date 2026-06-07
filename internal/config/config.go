@@ -54,6 +54,12 @@ var githubLoginRe = regexp.MustCompile(`^[a-zA-Z0-9-]{1,39}$`)
 // splits arguments — so only this conservative character set is allowed.
 var validBindRe = regexp.MustCompile(`^[0-9A-Za-z./:_-]+$`)
 
+// githubRepoRe matches owner/name for coordination.github_repo.
+var githubRepoRe = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?/[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$`)
+
+// issueNumberRe matches a GitHub issue number used in channels.alerts/lessons.
+var issueNumberRe = regexp.MustCompile(`^[1-9][0-9]*$`)
+
 // vaultRefRe matches ${vault:BUCKET.KEY} in MCP server env values.
 var vaultRefRe = regexp.MustCompile(`\$\{vault:([^.}]+)\.([^}]+)\}`)
 
@@ -496,7 +502,7 @@ type EgressConfig struct {
 // DefaultEgressDomains is the allowlist applied when egress is enabled but no
 // domains are configured: the minimum an agent needs to reach Anthropic and
 // GitHub. pipelock wildcards match the apex too.
-var DefaultEgressDomains = []string{"*.anthropic.com", "github.com", "*.githubusercontent.com"}
+var DefaultEgressDomains = []string{"*.anthropic.com", "github.com", "api.github.com", "*.githubusercontent.com"}
 
 // PostureOrDefault returns the configured pipelock mode, defaulting to balanced.
 func (e EgressConfig) PostureOrDefault() string {
@@ -545,9 +551,19 @@ func (c *Config) EgressEnabledFor(agentKey string) bool {
 }
 
 type Coordination struct {
-	Backend  string            `yaml:"backend"`
-	ServerID string            `yaml:"server_id"`
-	Channels map[string]string `yaml:"channels"`
+	Backend string `yaml:"backend"`
+	// ServerID is the Discord guild or Slack workspace ID. Unused for GitHub.
+	ServerID string `yaml:"server_id"`
+	// GithubRepo is owner/name for the task-board repo when backend is github.
+	GithubRepo string            `yaml:"github_repo"`
+	Channels   map[string]string `yaml:"channels"`
+}
+
+func (c *Coordination) BackendOrDefault() string {
+	if c.Backend == "" {
+		return "discord"
+	}
+	return c.Backend
 }
 
 type AgentConfig struct {
@@ -816,6 +832,17 @@ func (c *Config) TtydServiceName(agentKey string) string {
 	return fmt.Sprintf("clem-ttyd-%s-%s.service", c.Project, agentKey)
 }
 
+// GitHubWatchServiceName returns the systemd service name for the GitHub issue
+// watcher sidecar that wakes the agent's tmux session on new tasks.
+func (c *Config) GitHubWatchServiceName(agentKey string) string {
+	return fmt.Sprintf("clem-github-watch-%s-%s.service", c.Project, agentKey)
+}
+
+// UsesGitHubCoordination reports whether coordination uses GitHub Issues.
+func (c *Config) UsesGitHubCoordination() bool {
+	return c.Coordination.BackendOrDefault() == "github"
+}
+
 // PipelockServiceName returns the systemd service name for the egress proxy.
 func (c *Config) PipelockServiceName() string {
 	return fmt.Sprintf("clem-pipelock-%s.service", c.Project)
@@ -969,6 +996,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config has no agents defined")
 	}
 	if _, err := coordination.Known(cfg.Coordination.Backend); err != nil {
+		return nil, err
+	}
+	if err := cfg.Coordination.validate(); err != nil {
 		return nil, err
 	}
 	if err := cfg.Operator.validate(); err != nil {
@@ -1271,6 +1301,31 @@ func (cfg *Config) validateVaultServices() error {
 			if !serviceKeys[s] {
 				fmt.Fprintf(os.Stderr, "warning: agent %s: brokered secret %q has no matching vault.service — it would egress as a placeholder\n", key, s)
 			}
+		}
+	}
+	return nil
+}
+
+func (c *Coordination) validate() error {
+	backend := c.Backend
+	if backend == "" {
+		backend = "discord"
+	}
+	switch backend {
+	case "github":
+		if c.GithubRepo == "" {
+			return fmt.Errorf("coordination.github_repo is required when backend is github")
+		}
+		if !githubRepoRe.MatchString(c.GithubRepo) {
+			return fmt.Errorf("coordination.github_repo: %q is not a valid owner/name repo slug", c.GithubRepo)
+		}
+		for _, key := range []string{"alerts", "lessons"} {
+			if v := strings.TrimSpace(c.Channels[key]); v != "" && !issueNumberRe.MatchString(v) {
+				return fmt.Errorf("coordination.channels.%s: %q must be a GitHub issue number when backend is github", key, v)
+			}
+		}
+		if v := strings.TrimSpace(c.Channels["tasks"]); v == "" {
+			return fmt.Errorf("coordination.channels.tasks is required when backend is github (use a label such as clem:todo)")
 		}
 	}
 	return nil

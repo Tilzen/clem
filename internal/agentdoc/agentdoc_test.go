@@ -274,3 +274,13 @@ func TestRender_OperatorGitHubOnly(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+func TestSubstitute_GitHubRepo(t *testing.T) {
+	cfg := testCfg()
+	cfg.Coordination.Backend = "github"
+	cfg.Coordination.GithubRepo = "org/tasks"
+	got := Substitute("repo={{coordination.github_repo}}", cfg, "lead")
+	if got != "repo=org/tasks" {
+		t.Errorf("got %q", got)
+	}
+}

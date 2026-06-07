@@ -330,3 +330,71 @@ jobs:
       - name: Cleanup
         if: always()
         run: podman rm -f clem-sample-boot 2>/dev/null || true
+
+  github-coordination:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - name: Install runtime deps (tmux, age, sops, yq, python3)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            tmux age python3 python3-pip
+          sudo curl -sSL -o /usr/local/bin/sops \
+            https://github.com/getsops/sops/releases/download/v3.12.2/sops-v3.12.2.linux.amd64
+          sudo chmod +x /usr/local/bin/sops
+          sudo curl -sSL -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Build clem
+        run: go build -o clem .
+
+      - name: Prepare GitHub coordination project
+        run: |
+          mkdir -p /tmp/gh && cd /tmp/gh
+          cat > clem.yaml <<'EOF'
+          project: ghtest
+          coordination:
+            backend: github
+            github_repo: acme/tasks
+            channels:
+              tasks: "clem:todo"
+              alerts: "12"
+              lessons: "34"
+          agents:
+            lead:
+              name: "GHLead"
+              role: "tester"
+              model: "claude-sonnet-4-6"
+              iteration: 5m
+              vaults: [github]
+          EOF
+          "$GITHUB_WORKSPACE/clem" vault init
+          "$GITHUB_WORKSPACE/clem" vault set github GITHUB_TOKEN=ghfakefortestingonly
+
+      - name: Run clem provision
+        run: |
+          cd /tmp/gh
+          sudo -E "$GITHUB_WORKSPACE/clem" provision 2>&1 | tee /tmp/gh-provision.log
+          tail -20 /tmp/gh-provision.log
+
+      - name: Assert - GitHub watch sidecar installed
+        run: |
+          watch=/home/ghtest-lead/.local/bin/clem-github-watch.sh
+          sudo test -x "$watch"
+          sudo bash -n "$watch"
+          sudo grep -q 'api.github.com/repos/' "$watch"
+          sudo grep -q 'If-None-Match' "$watch"
+          sudo grep -q 'tmux send-keys' "$watch"
+          sudo test -f /etc/systemd/system/clem-github-watch-ghtest-lead.service
+          sudo systemd-analyze verify /etc/systemd/system/clem-github-watch-ghtest-lead.service
+          sudo grep -q 'Wants=clem-github-watch-ghtest-lead.service' /etc/systemd/system/clem-ghtest-lead.service
+          sudo grep -q 'JoinsNamespaceOf=clem-ghtest-lead.service' /etc/systemd/system/clem-github-watch-ghtest-lead.service

@@ -1,0 +1,83 @@
+package coordination
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestKnown_Backends(t *testing.T) {
+	tests := []struct {
+		name    string
+		want    string
+		wantErr bool
+	}{
+		{"", "discord", false},
+		{"discord", "discord", false},
+		{"slack", "slack", false},
+		{"github", "github", false},
+		{"gitlab", "", true},
+	}
+	for _, tc := range tests {
+		b, err := Known(tc.name)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("Known(%q) expected error", tc.name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("Known(%q): %v", tc.name, err)
+		}
+		if b.Name != tc.want {
+			t.Errorf("Known(%q).Name = %q, want %q", tc.name, b.Name, tc.want)
+		}
+	}
+}
+
+func TestRenderAlert_Discord(t *testing.T) {
+	b, _ := Known("discord")
+	got := RenderAlert(b, AlertParams{Channel: "123", Message: "hello"})
+	want := `https://discord.com/api/v10/channels/123/messages`
+	if !strings.Contains(got, want) {
+		t.Fatalf("RenderAlert discord missing %q:\n%s", want, got)
+	}
+	if !strings.Contains(got, `hello`) {
+		t.Fatalf("RenderAlert discord missing message:\n%s", got)
+	}
+}
+
+func TestRenderAlert_Slack(t *testing.T) {
+	b, _ := Known("slack")
+	got := RenderAlert(b, AlertParams{Channel: "C123", Message: "ping"})
+	if !strings.Contains(got, `slack.com/api/chat.postMessage`) {
+		t.Fatalf("RenderAlert slack missing API URL:\n%s", got)
+	}
+	if !strings.Contains(got, `\"channel\":\"C123\"`) {
+		t.Fatalf("RenderAlert slack missing channel:\n%s", got)
+	}
+}
+
+func TestRenderAlert_GitHub(t *testing.T) {
+	b, _ := Known("github")
+	got := RenderAlert(b, AlertParams{
+		Repo:    "owner/repo",
+		Channel: "42",
+		Message: "alert body",
+	})
+	for _, want := range []string{
+		`api.github.com/repos/owner/repo/issues/42/comments`,
+		`Authorization: Bearer $GITHUB_TOKEN`,
+		`alert body`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("RenderAlert github missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGitHub_TokenEnvVar(t *testing.T) {
+	b, _ := Known("github")
+	if b.TokenEnvVar != "GITHUB_TOKEN" {
+		t.Fatalf("github TokenEnvVar = %q, want GITHUB_TOKEN", b.TokenEnvVar)
+	}
+}

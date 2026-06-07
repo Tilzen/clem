@@ -9,6 +9,7 @@ import (
 	"github.com/jahwag/clem/internal/agent"
 	"github.com/jahwag/clem/internal/agentdoc"
 	"github.com/jahwag/clem/internal/config"
+	"github.com/jahwag/clem/internal/githubwatch"
 	"github.com/jahwag/clem/internal/proxy"
 	"github.com/jahwag/clem/internal/remote"
 	"github.com/jahwag/clem/internal/runner"
@@ -279,6 +280,23 @@ func runProvision(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("installing ttyd service for %s: %w", agentKey, err)
 			}
 			fmt.Printf("  installed %s (port %d)\n", ttydSvcName, ac.WebTerminalPort)
+		}
+
+		if cfg.UsesGitHubCoordination() {
+			watchContent := githubwatch.GenerateScript(cfg, agentKey)
+			watchPath := filepath.Join(binDir, "clem-github-watch.sh")
+			if err := os.WriteFile(watchPath, []byte(watchContent), 0755); err != nil {
+				return fmt.Errorf("writing github watch script for %s: %w", agentKey, err)
+			}
+			chownDir(watchPath, osUser)
+			fmt.Printf("  wrote %s\n", watchPath)
+
+			watchSvc := githubwatch.GenerateService(cfg, agentKey)
+			watchSvcName := cfg.GitHubWatchServiceName(agentKey)
+			if err := agent.InstallServiceByName(watchSvcName, watchSvc); err != nil {
+				return fmt.Errorf("installing github watch service for %s: %w", agentKey, err)
+			}
+			fmt.Printf("  installed %s\n", watchSvcName)
 		}
 	}
 

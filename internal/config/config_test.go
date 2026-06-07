@@ -1727,3 +1727,92 @@ agents:
 		}
 	}
 }
+
+func TestLoad_GitHubBackendValid(t *testing.T) {
+	raw := []byte(`
+project: gh-team
+coordination:
+  backend: github
+  github_repo: acme/clem-tasks
+  channels:
+    tasks: "clem:todo"
+    alerts: "12"
+    lessons: "34"
+agents:
+  lead:
+    name: Lead
+    model: claude-sonnet-4-6
+    iteration: 5m
+    prompt: go
+`)
+	path := writeYAML(t, string(raw))
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Coordination.GithubRepo != "acme/clem-tasks" {
+		t.Fatalf("GithubRepo = %q", cfg.Coordination.GithubRepo)
+	}
+}
+
+func TestLoad_GitHubBackendMissingRepo(t *testing.T) {
+	raw := []byte(`
+project: gh-team
+coordination:
+  backend: github
+  channels:
+    tasks: "clem:todo"
+    alerts: "12"
+agents:
+  lead:
+    name: Lead
+    model: claude-sonnet-4-6
+    iteration: 5m
+    prompt: go
+`)
+	_, err := Load(writeYAML(t, string(raw)))
+	if err == nil || !strings.Contains(err.Error(), "github_repo") {
+		t.Fatalf("expected github_repo error, got %v", err)
+	}
+}
+
+func TestLoad_GitHubBackendInvalidAlertsIssue(t *testing.T) {
+	raw := []byte(`
+project: gh-team
+coordination:
+  backend: github
+  github_repo: org/repo
+  channels:
+    tasks: "clem:todo"
+    alerts: "not-a-number"
+agents:
+  lead:
+    name: Lead
+    model: claude-sonnet-4-6
+    iteration: 5m
+    prompt: go
+`)
+	_, err := Load(writeYAML(t, string(raw)))
+	if err == nil || !strings.Contains(err.Error(), "channels.alerts") {
+		t.Fatalf("expected alerts issue number error, got %v", err)
+	}
+}
+
+func TestLoad_UnknownCoordinationBackend(t *testing.T) {
+	raw := []byte(`
+project: x
+coordination:
+  backend: gitlab
+agents:
+  lead:
+    name: L
+    model: m
+    iteration: 1m
+    prompt: p
+`)
+	_, err := Load(writeYAML(t, string(raw)))
+	if err == nil || !strings.Contains(err.Error(), "gitlab") {
+		t.Fatalf("expected unknown backend error, got %v", err)
+	}
+}
+

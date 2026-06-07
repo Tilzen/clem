@@ -634,3 +634,90 @@ func TestSidecarServersLiteral(t *testing.T) {
 		t.Errorf("non-subscriber literal = %q", got)
 	}
 }
+
+func TestGenerate_GitHubBackendAlertCurl(t *testing.T) {
+	cfg := &config.Config{
+		Project: "test",
+		Coordination: config.Coordination{
+			Backend:    "github",
+			GithubRepo: "owner/tasks",
+			Channels: map[string]string{
+				"alerts": "99",
+			},
+		},
+		Agents: map[string]config.AgentConfig{
+			"worker": {
+				Name:      "Worker",
+				Model:     "claude-opus-4-7",
+				Iteration: "1m",
+				Prompt:    "do the thing",
+			},
+		},
+	}
+	out := Generate(cfg, "worker")
+	for _, want := range []string{
+		`[ -n "$GITHUB_TOKEN" ]`,
+		`api.github.com/repos/owner/tasks/issues/99/comments`,
+		`Authorization: Bearer $GITHUB_TOKEN`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("github runner missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestGenerate_GitHubBackendSkipsChatMCP(t *testing.T) {
+	cfg := &config.Config{
+		Project: "test",
+		Coordination: config.Coordination{
+			Backend:    "github",
+			GithubRepo: "owner/tasks",
+			Channels: map[string]string{
+				"tasks": "clem:todo",
+			},
+		},
+		Agents: map[string]config.AgentConfig{
+			"worker": {
+				Name:      "Worker",
+				Model:     "claude-opus-4-7",
+				Iteration: "1m",
+				Prompt:    "do the thing",
+			},
+		},
+	}
+	out := Generate(cfg, "worker")
+	if !strings.Contains(out, `_backend = 'github'`) {
+		t.Fatalf("expected coordination backend in mcp generator:\n%s", out)
+	}
+	if !strings.Contains(out, `if _backend != 'github' and os.environ.get('DISCORD_TOKEN'):`) {
+		t.Fatalf("expected discord MCP guarded for github backend:\n%s", out)
+	}
+}
+
+func TestGenerateService_GitHubWatchUnitDeps(t *testing.T) {
+	mockHome(t, "/home/test-worker")
+	cfg := &config.Config{
+		Project: "test",
+		Coordination: config.Coordination{
+			Backend:    "github",
+			GithubRepo: "acme/tasks",
+			Channels:   map[string]string{"tasks": "clem:todo", "alerts": "1"},
+		},
+		Agents: map[string]config.AgentConfig{
+			"worker": {
+				Name:      "Worker",
+				Model:     "claude-opus-4-7",
+				Iteration: "1m",
+				Prompt:    "do the thing",
+			},
+		},
+	}
+	out, err := GenerateService(cfg, "worker")
+	if err != nil {
+		t.Fatalf("GenerateService: %v", err)
+	}
+	want := "Wants=clem-github-watch-test-worker.service"
+	if !strings.Contains(out, want) {
+		t.Fatalf("expected %q in service unit:\n%s", want, out)
+	}
+}
