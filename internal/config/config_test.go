@@ -969,7 +969,6 @@ agents:
 	}
 }
 
-
 func TestLoad_EgressParsed(t *testing.T) {
 	path := writeYAML(t, `
 project: myteam
@@ -1595,7 +1594,7 @@ func TestValidateMCPSidecars_AgentVaultPortCollision(t *testing.T) {
 
 func TestSidecarListeners_SharedAndUnsubscribed(t *testing.T) {
 	cfg := &Config{
-		Project:     "myteam",
+		Project: "myteam",
 		MCPSidecars: MCPSidecarsConfig{BasePort: 14500, Servers: []SidecarServer{
 			{Name: "es-ro", Identity: "shared", Command: "/bin/x", Secrets: []string{"K"}},
 			{Name: "unused", Identity: "shared", Command: "/bin/x", Secrets: []string{"K"}},
@@ -1619,7 +1618,7 @@ func TestSidecarListeners_SharedAndUnsubscribed(t *testing.T) {
 
 func TestSidecarListeners_PerAgentOnePortEach(t *testing.T) {
 	cfg := &Config{
-		Project:     "myteam",
+		Project: "myteam",
 		MCPSidecars: MCPSidecarsConfig{BasePort: 14500, Servers: []SidecarServer{
 			{Name: "disc", Identity: "per-agent", Command: "/bin/x", Secrets: []string{"DISCORD_TOKEN"}},
 		}},

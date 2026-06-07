@@ -580,7 +580,7 @@ type AgentConfig struct {
 	// WebTerminalBind controls which interface ttyd listens on. Default
 	// 127.0.0.1 for safety (expects SSH tunnel or reverse proxy). Use
 	// 0.0.0.0 when running inside a container with host port-forward.
-	WebTerminalBind string `yaml:"web_terminal_bind"`
+	WebTerminalBind string       `yaml:"web_terminal_bind"`
 	Caveman         CavemanLevel `yaml:"caveman"`
 	// Runtime selects which CLI drives the agent's session. Default is
 	// claude-code. opencode talks to 75+ providers (including Ollama) via

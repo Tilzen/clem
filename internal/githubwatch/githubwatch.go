@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	defaultPollSeconds    = 60
+	defaultPollSeconds     = 60
 	defaultDebounceSeconds = 5
 )
 
@@ -140,18 +140,18 @@ WantedBy=multi-user.target
 `
 
 type params struct {
-	Project            string
-	AgentKey           string
-	AgentName          string
-	OSUser             string
-	HomeDir            string
-	GithubRepo         string
-	TaskLabel          string
-	TaskLabelEncoded   string
-	PollSeconds        int
-	DebounceSeconds    int
-	ProxyExport        string
-	EgressDirectives   string
+	Project          string
+	AgentKey         string
+	AgentName        string
+	OSUser           string
+	HomeDir          string
+	GithubRepo       string
+	TaskLabel        string
+	TaskLabelEncoded string
+	PollSeconds      int
+	DebounceSeconds  int
+	ProxyExport      string
+	EgressDirectives string
 }
 
 // GenerateScript renders the per-agent GitHub issue watcher script.
@@ -163,17 +163,17 @@ func GenerateScript(cfg *config.Config, agentKey string) string {
 	}
 	p := params{
 		Project:          cfg.Project,
-		AgentKey:           agentKey,
-		AgentName:          ac.Name,
-		OSUser:             cfg.OSUsername(agentKey),
-		HomeDir:            fmt.Sprintf("/home/%s", cfg.OSUsername(agentKey)),
-		GithubRepo:         cfg.Coordination.GithubRepo,
-		TaskLabel:          taskLabel,
-		TaskLabelEncoded:   url.QueryEscape(taskLabel),
-		PollSeconds:        defaultPollSeconds,
-		DebounceSeconds:    defaultDebounceSeconds,
-		ProxyExport:        proxyExportBlock(cfg, agentKey),
-		EgressDirectives:   egressDirectives(cfg, agentKey),
+		AgentKey:         agentKey,
+		AgentName:        ac.Name,
+		OSUser:           cfg.OSUsername(agentKey),
+		HomeDir:          fmt.Sprintf("/home/%s", cfg.OSUsername(agentKey)),
+		GithubRepo:       cfg.Coordination.GithubRepo,
+		TaskLabel:        taskLabel,
+		TaskLabelEncoded: url.QueryEscape(taskLabel),
+		PollSeconds:      defaultPollSeconds,
+		DebounceSeconds:  defaultDebounceSeconds,
+		ProxyExport:      proxyExportBlock(cfg, agentKey),
+		EgressDirectives: egressDirectives(cfg, agentKey),
 	}
 	return render(watchScriptTemplate, p)
 }
@@ -183,11 +183,11 @@ func GenerateService(cfg *config.Config, agentKey string) string {
 	ac := cfg.Agents[agentKey]
 	p := params{
 		Project:          cfg.Project,
-		AgentKey:           agentKey,
-		AgentName:          ac.Name,
-		OSUser:             cfg.OSUsername(agentKey),
-		HomeDir:            fmt.Sprintf("/home/%s", cfg.OSUsername(agentKey)),
-		EgressDirectives:   egressDirectives(cfg, agentKey),
+		AgentKey:         agentKey,
+		AgentName:        ac.Name,
+		OSUser:           cfg.OSUsername(agentKey),
+		HomeDir:          fmt.Sprintf("/home/%s", cfg.OSUsername(agentKey)),
+		EgressDirectives: egressDirectives(cfg, agentKey),
 	}
 	return render(serviceTemplate, p)
 }
