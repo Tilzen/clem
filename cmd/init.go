@@ -433,7 +433,7 @@ var initCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(initCmd)
-	initCmd.Flags().String("backend", "discord", "coordination backend template (discord, github)")
+	initCmd.Flags().String("backend", "discord", "coordination backend template (discord | github)")
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
