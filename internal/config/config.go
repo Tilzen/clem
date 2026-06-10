@@ -664,8 +664,9 @@ type AgentConfig struct {
 // ResourceLimits maps directly to systemd cgroup directives. All fields
 // optional; empty values are omitted from the rendered service unit.
 //
-// Field strings are written verbatim into the [Service] section; validation
-// is delegated to systemd. Standard formats:
+// String fields are checked against resourceLimitValue at Load() time so a
+// value cannot break out of its directive line in the generated [Service]
+// section; semantic validation is delegated to systemd. Standard formats:
 //   - CPUQuota:   "150%" (1.5 cores), "50%" (half a core), "200ms/1s"
 //   - MemoryHigh: "8G", "512M" (soft throttle — process slowed but not killed)
 //   - MemoryMax:  "10G" (hard kill — fires before global OOM-killer)
@@ -677,6 +678,34 @@ type ResourceLimits struct {
 	MemoryMax  string `yaml:"memory_max"`
 	CPUWeight  int    `yaml:"cpu_weight"`
 	IOWeight   int    `yaml:"io_weight"`
+}
+
+// resourceLimitValue permits the documented value formats for CPUQuota,
+// MemoryHigh, and MemoryMax ("150%", "200ms/1s", "8G", "infinity") while
+// excluding newlines and every other character that would let a value span
+// directive lines in the rendered unit. Directives() concatenates these
+// strings into a newline-delimited [Service] section, so an embedded newline
+// would inject arbitrary directives (e.g. a second ExecStart=).
+var resourceLimitValue = regexp.MustCompile(`^[0-9A-Za-z%./]*$`)
+
+// validate rejects string field values that could escape their directive
+// line in the systemd unit rendered by Directives(). key names the agent
+// in error messages.
+func (r ResourceLimits) validate(key string) error {
+	fields := []struct {
+		name string
+		val  string
+	}{
+		{"cpu_quota", r.CPUQuota},
+		{"memory_high", r.MemoryHigh},
+		{"memory_max", r.MemoryMax},
+	}
+	for _, f := range fields {
+		if !resourceLimitValue.MatchString(f.val) {
+			return fmt.Errorf("agent %s: resource_limits.%s %q must match %s", key, f.name, f.val, resourceLimitValue.String())
+		}
+	}
+	return nil
 }
 
 // Directives renders the resource-limit block for injection into a systemd
@@ -1035,6 +1064,9 @@ func Load(path string) (*Config, error) {
 			// span multiple sops vaults — no first-vault constraint.
 		}
 		ac.normalizeSubagentModel()
+		if err := ac.ResourceLimits.validate(key); err != nil {
+			return nil, err
+		}
 		if err := ac.validateExtensions(key); err != nil {
 			return nil, err
 		}

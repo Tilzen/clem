@@ -1663,3 +1663,67 @@ func TestSidecarPort_Deterministic(t *testing.T) {
 		t.Errorf("default base wrong: %d", (MCPSidecarsConfig{}).SidecarPort(0))
 	}
 }
+
+func TestLoad_ResourceLimitsValidValues(t *testing.T) {
+	path := writeYAML(t, `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+operator:
+  discord_ids: ["277434478803156993"]
+agents:
+  lead:
+    name: "Lead"
+    model: "claude-sonnet-4-6"
+    resource_limits:
+      cpu_quota: "150%"
+      memory_high: "512M"
+      memory_max: "8G"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	rl := cfg.Agents["lead"].ResourceLimits
+	if rl.CPUQuota != "150%" || rl.MemoryHigh != "512M" || rl.MemoryMax != "8G" {
+		t.Errorf("resource_limits not parsed: %+v", rl)
+	}
+}
+
+func TestLoad_ResourceLimitsRejectsUnsafeValues(t *testing.T) {
+	cases := []struct {
+		desc  string
+		field string
+		value string
+	}{
+		{"newline injects directive", "cpu_quota", `"150%\nExecStart=/bin/false"`},
+		{"carriage return", "memory_high", `"8G\rMemoryMax=1"`},
+		{"space", "memory_max", `"8G extra"`},
+		{"tab", "cpu_quota", `"150%\tx"`},
+		{"equals sign", "memory_max", `"8G=x"`},
+		{"unicode line separator", "memory_high", `"8G\u20288M"`},
+	}
+	for _, tc := range cases {
+		path := writeYAML(t, `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+operator:
+  discord_ids: ["277434478803156993"]
+agents:
+  lead:
+    name: "Lead"
+    model: "claude-sonnet-4-6"
+    resource_limits:
+      `+tc.field+`: `+tc.value+"\n")
+		if _, err := Load(path); err == nil {
+			t.Errorf("%s: Load accepted %s=%s, want error", tc.desc, tc.field, tc.value)
+		} else if !strings.Contains(err.Error(), "resource_limits."+tc.field) {
+			t.Errorf("%s: error %q does not name resource_limits.%s", tc.desc, err, tc.field)
+		}
+	}
+}
