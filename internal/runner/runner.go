@@ -622,7 +622,13 @@ func sidecarServersLiteral(cfg *config.Config, agentKey string) string {
 // Go map-iteration orderings, which keeps generated runner.sh diffs
 // minimal between provisions.
 func discordWatchChannels(cfg *config.Config) string {
-	if cfg == nil || cfg.Coordination.Backend != "discord" {
+	if cfg == nil {
+		return ""
+	}
+	// Compare the resolved backend name, not the raw field: an omitted
+	// backend value defaults to discord (#153).
+	backend, _ := coordination.Known(cfg.Coordination.Backend) // validated at load time
+	if backend.Name != "discord" {
 		return ""
 	}
 	names := make([]string, 0, len(cfg.Coordination.Channels))

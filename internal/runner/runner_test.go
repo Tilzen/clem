@@ -419,6 +419,25 @@ func TestGenerate_DiscordWatchSkippedForNonDiscordBackend(t *testing.T) {
 	}
 }
 
+func TestGenerate_DiscordWatchWiredWhenBackendOmitted(t *testing.T) {
+	// An empty backend field resolves to discord via coordination.Known, so
+	// the watcher must be wired exactly as if "discord" were written out.
+	cfg := baseCfg("worker", config.AgentConfig{
+		Name:      "Worker",
+		Model:     "claude-opus-4-7",
+		Iteration: "1m",
+		Prompt:    "do the thing",
+	})
+	cfg.Coordination.Backend = ""
+
+	out := Generate(cfg, "worker")
+
+	wantList := "111,333,222"
+	if !strings.Contains(out, wantList) {
+		t.Fatalf("expected channel list %q when backend omitted, got:\n%s", wantList, out)
+	}
+}
+
 func TestGenerateService_PullsTtydUp(t *testing.T) {
 	mockHome(t, "/home/test-worker")
 	cfg := baseCfg("worker", config.AgentConfig{
