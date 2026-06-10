@@ -22,6 +22,19 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Re-arm the watchdog timer on the way out even if an agent fails to
+	// start (clem down stops it to keep agents down): a partially started
+	// fleet should still get watchdog recovery rather than no protection.
+	defer func() {
+		timerName := cfg.WatchdogTimerName()
+		fmt.Printf("starting %s... ", timerName)
+		if err := agent.StartService(timerName); err != nil {
+			fmt.Printf("FAILED: %v\n", err)
+			return
+		}
+		fmt.Println("ok")
+	}()
+
 	for agentKey, ac := range cfg.Agents {
 		svcName := cfg.ServiceName(agentKey)
 		fmt.Printf("starting %s (%s)... ", ac.Name, svcName)
