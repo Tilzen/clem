@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -26,13 +25,30 @@ func init() {
 	rootCmd.AddCommand(updateCmd)
 }
 
+type ghAsset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+	Size               int64  `json:"size"`
+}
+
 type ghRelease struct {
-	TagName string `json:"tag_name"`
-	Assets  []struct {
-		Name               string `json:"name"`
-		BrowserDownloadURL string `json:"browser_download_url"`
-		Size               int64  `json:"size"`
-	} `json:"assets"`
+	TagName string    `json:"tag_name"`
+	Assets  []ghAsset `json:"assets"`
+}
+
+// selectBinaryAsset picks the release asset whose name is exactly
+// clem_<os>_<arch>. Prefix matching is not safe here: the GitHub API does not
+// guarantee asset order, and any sibling asset that starts with the binary
+// name (a .sig/.pem, or the Syft SBOM if its naming ever drops the embedded
+// version) would be downloaded and renamed over the running binary.
+func selectBinaryAsset(assets []ghAsset, goos, goarch string) *ghAsset {
+	want := fmt.Sprintf("clem_%s_%s", goos, goarch)
+	for i := range assets {
+		if assets[i].Name == want {
+			return &assets[i]
+		}
+	}
+	return nil
 }
 
 func runUpdate(cmd *cobra.Command, args []string) error {
@@ -50,18 +66,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("Latest:          %s\n", rel.TagName)
 
-	assetName := fmt.Sprintf("clem_%s_%s", runtime.GOOS, runtime.GOARCH)
-	var asset *struct {
-		Name               string `json:"name"`
-		BrowserDownloadURL string `json:"browser_download_url"`
-		Size               int64  `json:"size"`
-	}
-	for i := range rel.Assets {
-		if strings.HasPrefix(rel.Assets[i].Name, assetName) {
-			asset = &rel.Assets[i]
-			break
-		}
-	}
+	asset := selectBinaryAsset(rel.Assets, runtime.GOOS, runtime.GOARCH)
 	if asset == nil {
 		return fmt.Errorf("no prebuilt binary for %s/%s in release %s — build from source", runtime.GOOS, runtime.GOARCH, rel.TagName)
 	}
