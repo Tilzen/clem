@@ -38,6 +38,13 @@ func AgentVaultName(sopsVault string) string {
 // githubLoginRe matches a valid GitHub username per GitHub's own rules.
 var githubLoginRe = regexp.MustCompile(`^[a-zA-Z0-9-]{1,39}$`)
 
+// validBindRe matches a safe web_terminal_bind value: an interface name,
+// IPv4/IPv6 address, hostname, or unix socket path (everything ttyd -i
+// accepts). The value lands verbatim on the ExecStart= line of the ttyd
+// systemd unit, where a newline starts a new directive and whitespace
+// splits arguments — so only this conservative character set is allowed.
+var validBindRe = regexp.MustCompile(`^[0-9A-Za-z./:_-]+$`)
+
 // vaultRefRe matches ${vault:BUCKET.KEY} in MCP server env values.
 var vaultRefRe = regexp.MustCompile(`\$\{vault:([^.}]+)\.([^}]+)\}`)
 
@@ -981,6 +988,9 @@ func Load(path string) (*Config, error) {
 				return nil, fmt.Errorf("agents %s and %s have the same web_terminal_port %d", other, key, ac.WebTerminalPort)
 			}
 			usedPorts[ac.WebTerminalPort] = key
+		}
+		if ac.WebTerminalBind != "" && !validBindRe.MatchString(ac.WebTerminalBind) {
+			return nil, fmt.Errorf("agent %s: web_terminal_bind must be an interface, IP address, hostname, or socket path (characters [0-9A-Za-z./:_-]), got %q", key, ac.WebTerminalBind)
 		}
 		switch ac.Effort {
 		case "", "low", "medium", "high", "xhigh", "max":

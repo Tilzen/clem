@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -1085,6 +1086,71 @@ agents:
 `)
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected error for proxy_port colliding with web_terminal_port, got nil")
+	}
+}
+
+func TestLoad_WebTerminalBindValidValues(t *testing.T) {
+	for _, bind := range []string{
+		"127.0.0.1",
+		"0.0.0.0",
+		"::",
+		"::1",
+		"eth0",
+		"terminal.example-host.com",
+		"/var/run/ttyd.sock",
+	} {
+		path := writeYAML(t, `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+agents:
+  lead:
+    name: "Lead"
+    model: "claude-sonnet-4-6"
+    web_terminal_port: 7681
+    web_terminal_bind: "`+bind+`"
+`)
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("web_terminal_bind %q: unexpected error: %v", bind, err)
+		}
+		if got := cfg.Agents["lead"].WebTerminalBind; got != bind {
+			t.Fatalf("web_terminal_bind %q: parsed as %q", bind, got)
+		}
+	}
+}
+
+func TestLoad_WebTerminalBindRejectsUnsafeValues(t *testing.T) {
+	for name, bind := range map[string]string{
+		"newline directive injection": "127.0.0.1\\n[Service]\\nExecStart=/usr/bin/false",
+		"carriage return":             "127.0.0.1\\r",
+		"space splits args":           "127.0.0.1 --writable",
+		"tab":                         "127.0.0.1\\t",
+		"equals sign":                 "bind=0.0.0.0",
+		"command substitution":        "$(hostname)",
+	} {
+		path := writeYAML(t, `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+agents:
+  lead:
+    name: "Lead"
+    model: "claude-sonnet-4-6"
+    web_terminal_port: 7681
+    web_terminal_bind: "`+bind+`"
+`)
+		_, err := Load(path)
+		if err == nil {
+			t.Fatalf("%s: expected error, got nil", name)
+		}
+		if !strings.Contains(err.Error(), "web_terminal_bind") {
+			t.Fatalf("%s: error should name web_terminal_bind, got: %v", name, err)
+		}
 	}
 }
 
