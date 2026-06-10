@@ -37,6 +37,7 @@ check_agent() {
     local agent_key="$1"
     local os_user="$2"
     local service="$3"
+    local stale_threshold="$4"
     local cooldown_file="$COOLDOWN_DIR/${agent_key}.cooldown"
 
     # Check cooldown
@@ -92,12 +93,15 @@ check_agent() {
         return
     fi
 
-    # Case 2: stale agent — runner log hasn't been updated in 30+ minutes
+    # Case 2: stale agent — runner log hasn't been touched in longer than
+    # the agent's own sleep interval (plus a small margin). The per-agent
+    # threshold is computed at provision time from iteration_duration so
+    # long-iteration configs don't trip on a normal between-iteration sleep.
     local logfile="/home/${os_user}/.claude/${agent_key}-runner.log"
     if [ -f "$logfile" ]; then
         local log_age
         log_age=$(( $(date +%s) - $(stat -c %Y "$logfile") ))
-        if (( log_age > 1800 )); then
+        if (( log_age > stale_threshold )); then
             echo "$(date -Iseconds) $agent_key: stale for $((log_age/60))min — hard restarting"
             pkill -u "$os_user" -f claude || true
             sleep 2
@@ -231,6 +235,18 @@ AccuracySec=30s
 WantedBy=timers.target
 `
 
+// staleMarginSeconds is added to an agent's iteration duration to derive the
+// per-agent stale threshold passed to check_agent. Sized to comfortably exceed
+// one watchdog tick (5 min) so a sleeping agent isn't restarted mid-cycle.
+const staleMarginSeconds = 300
+
+// staleFloorSeconds is the minimum stale threshold regardless of iteration
+// duration. The runner log goes quiet for the whole claude session (the loop
+// only logs at iteration boundaries), so a short-iteration agent must keep at
+// least the historical 30-minute grace or healthy mid-task sessions get
+// hard-restarted.
+const staleFloorSeconds = 1800
+
 type watchdogParams struct {
 	Project        string
 	EnvSource      string
@@ -278,7 +294,15 @@ func GenerateScript(cfg *config.Config) string {
 	for _, key := range keys {
 		osUser := cfg.OSUsername(key)
 		svc := cfg.ServiceName(key)
-		checks.WriteString(fmt.Sprintf(`check_agent "%s" "%s" "%s"`+"\n", key, osUser, svc))
+		ac := cfg.Agents[key]
+		iterDur, _ := ac.IterationDuration() // validated at load time
+		// Agents sleep up to iterDur between iterations; allow a 5-minute
+		// margin so the next iteration's log line lands before we flag stale.
+		stale := int(iterDur.Seconds()) + staleMarginSeconds
+		if stale < staleFloorSeconds {
+			stale = staleFloorSeconds
+		}
+		checks.WriteString(fmt.Sprintf(`check_agent "%s" "%s" "%s" "%d"`+"\n", key, osUser, svc, stale))
 	}
 
 	// Egress monitoring is wired in only when at least one agent is contained.

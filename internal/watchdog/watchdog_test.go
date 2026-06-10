@@ -103,6 +103,48 @@ func TestGenerateScript_SlackBackendAlertCurl(t *testing.T) {
 	}
 }
 
+func TestGenerateScript_StaleThresholdPerAgent(t *testing.T) {
+	cfg := &config.Config{
+		Project: "test",
+		Coordination: config.Coordination{
+			Backend: "discord",
+			Channels: map[string]string{
+				"alerts":  "111",
+				"tasks":   "222",
+				"general": "333",
+			},
+		},
+		Agents: map[string]config.AgentConfig{
+			"lead":     {Name: "Lead", Model: "claude-opus-4-7", Iteration: "45m", Prompt: "x"},
+			"follower": {Name: "Follower", Model: "claude-opus-4-7", Iteration: "5m", Prompt: "y"},
+		},
+	}
+	s := GenerateScript(cfg)
+
+	// 45m iteration → 2700 + 300 margin = 3000
+	wantLead := `check_agent "lead" "test-lead" "clem-test-lead.service" "3000"`
+	if !strings.Contains(s, wantLead) {
+		t.Errorf("expected lead invocation with 3000s stale threshold, missing %q\n---\n%s", wantLead, s)
+	}
+	// 5m iteration → 300 + 300 = 600, floored to 1800: the runner log is
+	// silent for the whole claude session, so short-iteration agents keep
+	// the historical 30-minute grace instead of being killed mid-task.
+	wantFollower := `check_agent "follower" "test-follower" "clem-test-follower.service" "1800"`
+	if !strings.Contains(s, wantFollower) {
+		t.Errorf("expected follower invocation floored at 1800s stale threshold, missing %q\n---\n%s", wantFollower, s)
+	}
+
+	// The hardcoded 30-minute threshold must be gone — the only valid path is
+	// the per-agent variable. A literal `> 1800` in the script would mean we
+	// regressed back to the old behavior.
+	if strings.Contains(s, `(( log_age > 1800 ))`) {
+		t.Errorf("hardcoded 1800s threshold must be replaced by stale_threshold var:\n%s", s)
+	}
+	if !strings.Contains(s, `(( log_age > stale_threshold ))`) {
+		t.Errorf("expected stale_threshold variable in stale check, got:\n%s", s)
+	}
+}
+
 func TestGenerateScript_OOMCheckPresent(t *testing.T) {
 	s := GenerateScript(baseCfg())
 	for _, want := range []string{
