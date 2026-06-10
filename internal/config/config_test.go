@@ -406,6 +406,41 @@ func TestLoad_GitIdentityOptional(t *testing.T) {
 	}
 }
 
+func TestLoad_GitEmailRejectsUnsafeCharacters(t *testing.T) {
+	cases := map[string]string{
+		"newline":         "ada@example.com\nevil@attacker.com",
+		"carriage return": "ada@example.com\revil@attacker.com",
+		"space":           "ada @example.com",
+		"tab":             "ada\t@example.com",
+		"control char":    "ada@example.com\x01",
+	}
+	for name, email := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := writeYAML(t, `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+operator:
+  discord_ids: ["277434478803156993"]
+agents:
+  lead:
+    name: "Ada"
+    model: "claude-sonnet-4-6"
+    git_email: `+fmt.Sprintf("%q", email)+`
+`)
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("Load accepted git_email %q, want error", email)
+			}
+			if !strings.Contains(err.Error(), "git_email") {
+				t.Errorf("error should name git_email, got: %v", err)
+			}
+		})
+	}
+}
+
 func TestLoad_OperatorParsed(t *testing.T) {
 	path := writeYAML(t, `
 project: myteam

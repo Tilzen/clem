@@ -25,6 +25,15 @@ var serviceNameRe = regexp.MustCompile(`^[a-z0-9-]{3,64}$`)
 // avNameInvalid matches characters not allowed in an agent-vault vault name.
 var avNameInvalid = regexp.MustCompile(`[^a-z0-9-]+`)
 
+// gitEmailInvalid matches ASCII whitespace and control characters — the
+// characters that corrupt the line-delimited files git_email is written
+// into: ~/.ssh/allowed_signers uses a space-delimited principal field (a
+// space or newline injects a second principal mapped to the agent's signing
+// key), and ~/.gitconfig is newline-delimited. Unicode separators (U+2028,
+// NEL, NBSP) pass, but neither git config nor OpenSSH's allowed_signers
+// parser treats them as line or field breaks.
+var gitEmailInvalid = regexp.MustCompile(`[\s\x00-\x1f\x7f]`)
+
 // AgentVaultName maps a clem/sops vault name to an agent-vault-compatible vault
 // name: lowercased, with any run of characters outside [a-z0-9-] collapsed to a
 // single hyphen. sops vault names may contain '_' (e.g. dev_to) or uppercase,
@@ -979,6 +988,9 @@ func Load(path string) (*Config, error) {
 		}
 		if _, err := ac.ProviderEnv(); err != nil {
 			return nil, fmt.Errorf("agent %s: %w", key, err)
+		}
+		if ac.GitEmail != "" && gitEmailInvalid.MatchString(ac.GitEmail) {
+			return nil, fmt.Errorf("agent %s: git_email must not contain whitespace or control characters, got %q", key, ac.GitEmail)
 		}
 		if ac.WebTerminalPort != 0 {
 			if ac.WebTerminalPort < 1024 || ac.WebTerminalPort > 65535 {
