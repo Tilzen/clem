@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
+	"strings"
 
 	"github.com/jahwag/clem/internal/agent"
+	"github.com/jahwag/clem/internal/config"
 	"github.com/jahwag/clem/internal/remote"
 	"github.com/spf13/cobra"
 )
@@ -25,10 +28,26 @@ func init() {
 
 func runLogin(cmd *cobra.Command, args []string) error {
 	if loginRemote != "" {
+		if len(args) > 0 {
+			return fmt.Errorf("agent args are not supported with --remote; run clem login %s on the remote host instead", strings.Join(args, " "))
+		}
 		return remote.Login(loginRemote)
 	}
 
-	for agentKey, ac := range cfg.Agents {
+	agents, err := selectAgents(cfg.Agents, args)
+	if err != nil {
+		return err
+	}
+
+	// Sort agent keys for consistent output (matches clem status).
+	keys := make([]string, 0, len(agents))
+	for key := range agents {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, agentKey := range keys {
+		ac := agents[agentKey]
 		osUser := cfg.OSUsername(agentKey)
 		fmt.Printf("[%s] %s (%s)\n", agentKey, ac.Name, osUser)
 
@@ -49,4 +68,21 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		}
 	}
 	return nil
+}
+
+// selectAgents narrows the configured agents to the keys given on the
+// command line. No keys means all agents.
+func selectAgents(all map[string]config.AgentConfig, keys []string) (map[string]config.AgentConfig, error) {
+	if len(keys) == 0 {
+		return all, nil
+	}
+	selected := make(map[string]config.AgentConfig, len(keys))
+	for _, key := range keys {
+		ac, ok := all[key]
+		if !ok {
+			return nil, fmt.Errorf("unknown agent: %s", key)
+		}
+		selected[key] = ac
+	}
+	return selected, nil
 }
