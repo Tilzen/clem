@@ -6,7 +6,12 @@ import (
 	"testing"
 )
 
-func TestInitTemplateContainsRunnerExitProtocol(t *testing.T) {
+// generateSharedMD runs clem init in a temp dir and returns the generated
+// CLAUDE.shared.md content. The working directory is restored when the
+// test finishes.
+func generateSharedMD(t *testing.T) string {
+	t.Helper()
+
 	tmp := t.TempDir()
 
 	prev, err := os.Getwd()
@@ -16,7 +21,7 @@ func TestInitTemplateContainsRunnerExitProtocol(t *testing.T) {
 	if err := os.Chdir(tmp); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = os.Chdir(prev) }()
+	t.Cleanup(func() { _ = os.Chdir(prev) })
 
 	if err := runInit(nil, nil); err != nil {
 		t.Fatalf("runInit failed: %v", err)
@@ -26,7 +31,11 @@ func TestInitTemplateContainsRunnerExitProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading CLAUDE.shared.md: %v", err)
 	}
-	content := string(data)
+	return string(data)
+}
+
+func TestInitTemplateContainsRunnerExitProtocol(t *testing.T) {
+	content := generateSharedMD(t)
 
 	checks := []string{
 		"kill $PPID",
@@ -37,5 +46,27 @@ func TestInitTemplateContainsRunnerExitProtocol(t *testing.T) {
 		if !strings.Contains(content, want) {
 			t.Errorf("CLAUDE.shared.md missing %q", want)
 		}
+	}
+}
+
+func TestInitTemplateUsesDiscordBotToolPrefix(t *testing.T) {
+	content := generateSharedMD(t)
+
+	// The runner registers the Discord MCP server under the key
+	// "discord-bot", so Claude Code exposes its tools as
+	// mcp__discord-bot__<tool>. The bare mcp__discord__ prefix matches
+	// no server and the tool calls silently fail.
+	for _, want := range []string{
+		"mcp__discord-bot__send_message",
+		"mcp__discord-bot__read_messages",
+		"mcp__discord-bot__create_forum_post",
+		"mcp__discord-bot__edit_thread",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("CLAUDE.shared.md missing %q", want)
+		}
+	}
+	if strings.Contains(content, "mcp__discord__") {
+		t.Error("CLAUDE.shared.md still references the nonexistent mcp__discord__ tool prefix")
 	}
 }

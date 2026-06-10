@@ -72,10 +72,10 @@ const claudeSharedTemplate = `# CLAUDE.local.md — runtime contract for all {{p
 The Discord server must be private. Only invite people you trust.
 
 Use these MCP tools directly — never use curl or bash to call Discord:
-  mcp__discord__send_message
-  mcp__discord__read_messages
-  mcp__discord__create_forum_post
-  mcp__discord__edit_thread
+  mcp__discord-bot__send_message
+  mcp__discord-bot__read_messages
+  mcp__discord-bot__create_forum_post
+  mcp__discord-bot__edit_thread
 
 Do NOT run ` + "`claude mcp list`" + ` — it only shows marketplace servers, not local ones.
 
