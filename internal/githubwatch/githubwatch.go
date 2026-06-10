@@ -35,7 +35,9 @@ log() { echo "$(date -Iseconds) $1" | tee -a "$LOGFILE"; }
 load_state() {
     ETAG=""
     OLD_IDS=""
+    HAD_STATE_FILE=0
     if [ -f "$STATE_FILE" ]; then
+        HAD_STATE_FILE=1
         ETAG=$(grep '^etag=' "$STATE_FILE" 2>/dev/null | cut -d= -f2- || true)
         OLD_IDS=$(grep '^ids=' "$STATE_FILE" 2>/dev/null | cut -d= -f2- || true)
     fi
@@ -105,7 +107,9 @@ nums=sorted(i['number'] for i in data if isinstance(i,dict) and not i.get('assig
 print(' '.join(str(n) for n in nums))
 " "$body" 2>/dev/null || true)
     ETAG="$new_etag"
-    if [ -n "$OLD_IDS" ]; then
+    # Skip wake on the very first poll (no prior state). Once a state file exists,
+    # diff even when OLD_IDS is empty so empty→non-empty transitions wake the agent.
+    if [ "$HAD_STATE_FILE" -eq 1 ]; then
         if comm -13 <(echo "$OLD_IDS" | tr ' ' '\n' | sort -n) <(echo "$NEW_IDS" | tr ' ' '\n' | sort -n) | grep -q .; then
             maybe_wake
         fi
@@ -123,7 +127,7 @@ done
 const serviceTemplate = `[Unit]
 Description=Clem GitHub issue watcher: {{.AgentName}} ({{.Project}})
 After=clem-{{.Project}}-{{.AgentKey}}.service
-BindsTo=clem-{{.Project}}-{{.AgentKey}}.service
+{{.ProxyUnitDeps}}BindsTo=clem-{{.Project}}-{{.AgentKey}}.service
 PartOf=clem-{{.Project}}-{{.AgentKey}}.service
 JoinsNamespaceOf=clem-{{.Project}}-{{.AgentKey}}.service
 
@@ -151,6 +155,7 @@ type params struct {
 	PollSeconds      int
 	DebounceSeconds  int
 	ProxyExport      string
+	ProxyUnitDeps    string
 	EgressDirectives string
 }
 
@@ -187,6 +192,7 @@ func GenerateService(cfg *config.Config, agentKey string) string {
 		AgentName:        ac.Name,
 		OSUser:           cfg.OSUsername(agentKey),
 		HomeDir:          fmt.Sprintf("/home/%s", cfg.OSUsername(agentKey)),
+		ProxyUnitDeps:    proxyUnitDeps(cfg, agentKey),
 		EgressDirectives: egressDirectives(cfg, agentKey),
 	}
 	return render(serviceTemplate, p)
@@ -215,6 +221,16 @@ func egressDirectives(cfg *config.Config, agentKey string) string {
 	return ""
 }
 
+// proxyUnitDeps ties the watcher to the pipelock proxy when egress containment
+// is active for the agent, so polls do not fail open against a down proxy.
+func proxyUnitDeps(cfg *config.Config, agentKey string) string {
+	if !cfg.EgressEnabledFor(agentKey) {
+		return ""
+	}
+	return fmt.Sprintf("After=%s\nWants=%s\n",
+		cfg.PipelockServiceName(), cfg.PipelockServiceName())
+}
+
 func render(tmpl string, p params) string {
 	r := strings.NewReplacer(
 		"{{.Project}}", p.Project,
@@ -228,6 +244,7 @@ func render(tmpl string, p params) string {
 		"{{.PollSeconds}}", fmt.Sprintf("%d", p.PollSeconds),
 		"{{.DebounceSeconds}}", fmt.Sprintf("%d", p.DebounceSeconds),
 		"{{.ProxyExport}}", p.ProxyExport,
+		"{{.ProxyUnitDeps}}", p.ProxyUnitDeps,
 		"{{.EgressDirectives}}", p.EgressDirectives,
 	)
 	return r.Replace(tmpl)

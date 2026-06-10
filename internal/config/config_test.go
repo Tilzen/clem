@@ -1775,6 +1775,54 @@ agents:
 	}
 }
 
+func TestLoad_GitHubBackendInvalidTasksLabel(t *testing.T) {
+	raw := []byte(`
+project: gh-team
+coordination:
+  backend: github
+  github_repo: org/repo
+  channels:
+    tasks: 'clem:todo"; rm -rf /; "'
+    alerts: "12"
+agents:
+  lead:
+    name: Lead
+    model: claude-sonnet-4-6
+    iteration: 5m
+    prompt: go
+`)
+	_, err := Load(writeYAML(t, string(raw)))
+	if err == nil || !strings.Contains(err.Error(), "channels.tasks") {
+		t.Fatalf("expected tasks label error, got %v", err)
+	}
+}
+
+func TestEgressDomainsOrDefault_GitHubBackendAddsAPI(t *testing.T) {
+	cfg := &Config{
+		Coordination: Coordination{Backend: "github", GithubRepo: "org/repo", Channels: map[string]string{"tasks": "clem:todo"}},
+	}
+	domains := cfg.EgressDomainsOrDefault()
+	found := false
+	for _, d := range domains {
+		if d == "api.github.com" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected api.github.com for github backend, got %v", domains)
+	}
+}
+
+func TestEgressDomainsOrDefault_DiscordBackendOmitsAPI(t *testing.T) {
+	cfg := &Config{Coordination: Coordination{Backend: "discord"}}
+	domains := cfg.EgressDomainsOrDefault()
+	for _, d := range domains {
+		if d == "api.github.com" {
+			t.Fatalf("discord backend should not add api.github.com, got %v", domains)
+		}
+	}
+}
+
 func TestLoad_GitHubBackendInvalidAlertsIssue(t *testing.T) {
 	raw := []byte(`
 project: gh-team

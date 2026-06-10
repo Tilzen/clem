@@ -60,6 +60,10 @@ var githubRepoRe = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?/[
 // issueNumberRe matches a GitHub issue number used in channels.alerts/lessons.
 var issueNumberRe = regexp.MustCompile(`^[1-9][0-9]*$`)
 
+// githubLabelRe matches a safe GitHub issue label for channels.tasks (injected
+// into generated bash). Rejects shell metacharacters; max 50 chars per GitHub.
+var githubLabelRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9:_-]{0,49}$`)
+
 // vaultRefRe matches ${vault:BUCKET.KEY} in MCP server env values.
 var vaultRefRe = regexp.MustCompile(`\$\{vault:([^.}]+)\.([^}]+)\}`)
 
@@ -501,8 +505,9 @@ type EgressConfig struct {
 
 // DefaultEgressDomains is the allowlist applied when egress is enabled but no
 // domains are configured: the minimum an agent needs to reach Anthropic and
-// GitHub. pipelock wildcards match the apex too.
-var DefaultEgressDomains = []string{"*.anthropic.com", "github.com", "api.github.com", "*.githubusercontent.com"}
+// GitHub. api.github.com is appended by EgressDomainsOrDefault when GitHub
+// coordination is active. pipelock wildcards match the apex too.
+var DefaultEgressDomains = []string{"*.anthropic.com", "github.com", "*.githubusercontent.com"}
 
 // PostureOrDefault returns the configured pipelock mode, defaulting to balanced.
 func (e EgressConfig) PostureOrDefault() string {
@@ -531,9 +536,24 @@ func (e EgressConfig) ProxyUserOrDefault() string {
 // DomainsOrDefault returns the configured allowlist or DefaultEgressDomains.
 func (e EgressConfig) DomainsOrDefault() []string {
 	if len(e.Domains) == 0 {
-		return DefaultEgressDomains
+		return append([]string(nil), DefaultEgressDomains...)
 	}
 	return e.Domains
+}
+
+// EgressDomainsOrDefault returns the egress allowlist for a fleet, appending
+// api.github.com when GitHub coordination is enabled.
+func (c *Config) EgressDomainsOrDefault() []string {
+	domains := c.Egress.DomainsOrDefault()
+	if !c.UsesGitHubCoordination() {
+		return domains
+	}
+	for _, d := range domains {
+		if d == "api.github.com" {
+			return domains
+		}
+	}
+	return append(append([]string(nil), domains...), "api.github.com")
 }
 
 // EgressEnabledFor reports whether egress containment applies to an agent.
@@ -1324,8 +1344,12 @@ func (c *Coordination) validate() error {
 				return fmt.Errorf("coordination.channels.%s: %q must be a GitHub issue number when backend is github", key, v)
 			}
 		}
-		if v := strings.TrimSpace(c.Channels["tasks"]); v == "" {
+		v := strings.TrimSpace(c.Channels["tasks"])
+		if v == "" {
 			return fmt.Errorf("coordination.channels.tasks is required when backend is github (use a label such as clem:todo)")
+		}
+		if !githubLabelRe.MatchString(v) {
+			return fmt.Errorf("coordination.channels.tasks: %q is not a valid GitHub label (use letters, digits, :, _, - only)", v)
 		}
 	}
 	return nil

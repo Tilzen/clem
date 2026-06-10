@@ -113,7 +113,7 @@ func GeneratePipelockConfig(cfg *config.Config) string {
 	b.WriteString("tls_interception:\n")
 	fmt.Fprintf(&b, "  enabled: %t\n", e.TLSIntercept)
 	b.WriteString("api_allowlist:\n")
-	for _, d := range e.DomainsOrDefault() {
+	for _, d := range cfg.EgressDomainsOrDefault() {
 		fmt.Fprintf(&b, "  - %q\n", d)
 	}
 	b.WriteString("logging:\n")

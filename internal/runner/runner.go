@@ -676,8 +676,3 @@ func githubWatchUnitDeps(cfg *config.Config, agentKey string) string {
 	}
 	return fmt.Sprintf("Wants=%s\n", cfg.GitHubWatchServiceName(agentKey))
 }
-
-// discordWatchChannels is deprecated; use watchChannelIDs.
-func discordWatchChannels(cfg *config.Config) string {
-	return watchChannelIDs(cfg)
-}
