@@ -1238,6 +1238,143 @@ func InstallSkill(username string, s config.SkillConfig) error {
 	return nil
 }
 
+// SyncSkillsRepo clones (or pulls) repoURL into <homeDir>/.cache/<repoName>/
+// as the agent user, then symlinks every subdir under shared/ and <agentKey>/
+// into <homeDir>/.claude/skills/<name>. Symlinks pointing into the cache that
+// no longer resolve are pruned, so removing a skill in the repo propagates on
+// next sync. Idempotent.
+//
+// repoURL is any URL git clone understands (https, ssh, git@host:path).
+// agentKey selects which per-agent subdir to surface. Top-level dirs other
+// than shared and the agent's key are ignored.
+//
+// Skill name must match extensionNameRe (alphanumeric plus . _ -); invalid
+// names are skipped with a logged warning. The repo is operator-PR-reviewed,
+// so this is defense in depth, not the primary trust boundary.
+//
+// Called from provision (running as root); each shell-out is sudo-wrapped to
+// run as the agent user so files land with correct ownership.
+func SyncSkillsRepo(username, homeDir, agentKey, repoURL string) error {
+	run := func(name string, args ...string) ([]byte, error) {
+		return sys.Run("sudo", append([]string{"-iu", username, name}, args...)...)
+	}
+	mkDir := func(path string) error { return EnsureOwnedDir(path, username) }
+	return syncSkillsCommon(homeDir, agentKey, repoURL, run, mkDir)
+}
+
+// SyncSkillsRepoAsSelf is the runtime variant. Called by the runner inside
+// each iteration as the agent user, so no sudo wrapping. Dirs created
+// directly via os.MkdirAll (they land owned by the calling user).
+//
+// This is the loop that lets agent-authored skills land without re-running
+// `clem provision`: PR → merge → next iteration's runner pulls and re-symlinks
+// before launching the TUI.
+func SyncSkillsRepoAsSelf(homeDir, agentKey, repoURL string) error {
+	run := sys.Run
+	mkDir := func(path string) error { return os.MkdirAll(path, 0755) }
+	return syncSkillsCommon(homeDir, agentKey, repoURL, run, mkDir)
+}
+
+type cmdRunner func(name string, args ...string) ([]byte, error)
+
+func syncSkillsCommon(homeDir, agentKey, repoURL string, run cmdRunner, mkDir func(string) error) error {
+	repoName := skillsCacheName(repoURL)
+	cache := filepath.Join(homeDir, ".cache", repoName)
+	skillsDir := filepath.Join(homeDir, ".claude", "skills")
+
+	if _, err := os.Stat(cache); os.IsNotExist(err) {
+		if err := mkDir(filepath.Dir(cache)); err != nil {
+			return fmt.Errorf("ensuring cache parent: %w", err)
+		}
+		out, err := run("git", "clone", repoURL, cache)
+		if err != nil {
+			return fmt.Errorf("cloning skills repo %s: %w\n%s", repoURL, err, out)
+		}
+	} else {
+		out, err := run("git", "-C", cache, "pull", "--ff-only")
+		if err != nil {
+			return fmt.Errorf("pulling skills repo: %w\n%s", err, out)
+		}
+	}
+
+	if err := mkDir(skillsDir); err != nil {
+		return fmt.Errorf("ensuring skills dir: %w", err)
+	}
+
+	expected := make(map[string]string)
+	for _, src := range []string{"shared", agentKey} {
+		srcDir := filepath.Join(cache, src)
+		entries, err := os.ReadDir(srcDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("reading %s: %w", srcDir, err)
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			name := filepath.Base(e.Name())
+			if !config.IsValidExtensionName(name) {
+				fmt.Printf("  warning: skipping skill %q in %s (invalid name)\n", name, src)
+				continue
+			}
+			if prior, dup := expected[name]; dup {
+				fmt.Printf("  warning: skill %q in %s collides with %s; keeping first\n", name, src, prior)
+				continue
+			}
+			target := filepath.Join(srcDir, name)
+			link := filepath.Join(skillsDir, name)
+			if out, err := run("ln", "-sfn", target, link); err != nil {
+				return fmt.Errorf("symlinking skill %s: %w\n%s", name, err, out)
+			}
+			expected[name] = src
+		}
+	}
+
+	pruneStaleSkillSymlinks(skillsDir, cache, expected, run)
+	return nil
+}
+
+// skillsCacheName extracts the cache-directory name from a git URL: last
+// path segment with any trailing .git stripped. Handles https://host/a/b.git,
+// ssh://git@host/a/b, and scp-style git@host:a/b.git.
+func skillsCacheName(repoURL string) string {
+	s := strings.TrimSuffix(repoURL, "/")
+	if i := strings.LastIndexAny(s, "/:"); i >= 0 {
+		s = s[i+1:]
+	}
+	return strings.TrimSuffix(s, ".git")
+}
+
+// pruneStaleSkillSymlinks removes symlinks in skillsDir that point into the
+// cache dir but are no longer backed by an expected skill. Non-symlinks (real
+// dirs from InstallSkill) and links pointing outside the cache are left alone.
+func pruneStaleSkillSymlinks(skillsDir, cache string, expected map[string]string, run cmdRunner) {
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if _, kept := expected[name]; kept {
+			continue
+		}
+		full := filepath.Join(skillsDir, name)
+		target, err := os.Readlink(full)
+		if err != nil {
+			continue
+		}
+		if !strings.HasPrefix(target, cache+string(filepath.Separator)) {
+			continue
+		}
+		if out, err := run("rm", "-f", full); err != nil {
+			fmt.Printf("  warning: removing stale skill symlink %s: %v\n%s", full, err, out)
+		}
+	}
+}
+
 // SetMCPServers overwrites the mcpServers key in ~/.claude/settings.json while
 // preserving all other settings. Vault refs in env values are expanded via secrets.
 func SetMCPServers(homeDir string, servers []config.MCPServerConfig, secrets map[string]string) error {
