@@ -34,6 +34,19 @@ var avNameInvalid = regexp.MustCompile(`[^a-z0-9-]+`)
 // parser treats them as line or field breaks.
 var gitEmailInvalid = regexp.MustCompile(`[\s\x00-\x1f\x7f]`)
 
+// agentNameInvalid matches ASCII control characters — the characters that
+// corrupt the line-delimited sinks name and role are written into. The worst
+// sink is systemd unit Description= lines (a newline terminates the directive
+// and injects arbitrary subsequent directives, including a second [Service]
+// section with a crafted ExecStart); name also reaches the generated agent
+// doc and several bash strings in the runner templates, where a newline adds
+// log/script lines. Spaces stay legal — display names like "Lead Software
+// Engineer" are the common case. systemd splits unit files only on ASCII
+// newline, so unicode separators (U+2028, NEL) are not line breaks in that
+// sink. Shell metacharacters (quotes, $, backticks) are out of scope here:
+// escaping them belongs at the template render sites.
+var agentNameInvalid = regexp.MustCompile(`[\x00-\x1f\x7f]`)
+
 // AgentVaultName maps a clem/sops vault name to an agent-vault-compatible vault
 // name: lowercased, with any run of characters outside [a-z0-9-] collapsed to a
 // single hyphen. sops vault names may contain '_' (e.g. dev_to) or uppercase,
@@ -1020,6 +1033,12 @@ func Load(path string) (*Config, error) {
 		}
 		if ac.GitEmail != "" && gitEmailInvalid.MatchString(ac.GitEmail) {
 			return nil, fmt.Errorf("agent %s: git_email must not contain whitespace or control characters, got %q", key, ac.GitEmail)
+		}
+		if agentNameInvalid.MatchString(ac.Name) {
+			return nil, fmt.Errorf("agent %s: name must not contain control characters, got %q", key, ac.Name)
+		}
+		if agentNameInvalid.MatchString(ac.Role) {
+			return nil, fmt.Errorf("agent %s: role must not contain control characters, got %q", key, ac.Role)
 		}
 		if ac.WebTerminalPort != 0 {
 			if ac.WebTerminalPort < 1024 || ac.WebTerminalPort > 65535 {
