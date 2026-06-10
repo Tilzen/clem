@@ -47,25 +47,44 @@
 }
 </script>
 
+<!-- JSON-LD: FAQPage -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Why not just run Claude Code in a container?",
+      "acceptedAnswer": { "@type": "Answer", "text": "A container is a process boundary that is usually configured for convenience: blanket outbound network, a shared kernel, and sandbox settings the workload can often influence. clem puts the boundary below the agent instead. You pick a disposition per agent: a per-UID nftables rule that pins every outbound byte to an auditing proxy, or a secret-zero broker where the real credentials live with a different OS user. Either way the agent cannot disable a firewall it does not own or read another user's files. clem also provisions what containers do not: per-agent git and GitHub identity, chat coordination, and a watchdog." }
+    },
+    {
+      "@type": "Question",
+      "name": "Is running Claude Code this way allowed by Anthropic's terms?",
+      "acceptedAnswer": { "@type": "Answer", "text": "clem runs the unmodified official Claude Code CLI under your own account on hardware you own; it loops the same binary you run by hand, and Anthropic itself ships headless and CI integrations of Claude Code. clem makes no compliance claims either way. Read Anthropic's Usage Policy and the Commercial or Consumer Terms and decide for your own setup." }
+    },
+    {
+      "@type": "Question",
+      "name": "What do I need to run a fleet?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Any Linux host with systemd: a spare laptop, a Raspberry Pi, a home server, a small VPS. Agents spend most of their time waiting on the model API, so CPU and RAM needs are modest. You also need a Claude Code login or Anthropic API key for each agent, and a Discord or Slack space for coordination." }
+    },
+    {
+      "@type": "Question",
+      "name": "What can a compromised agent actually reach?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Its own home directory and whatever you allow-listed, by design. An egress-contained agent has every outbound byte pinned to an auditing proxy by a kernel rule it cannot rewrite; a brokered agent holds only placeholders, with the real credentials kept by a separate user it cannot read. The threat model documents the guarantees and the explicit non-goals." }
+    },
+    {
+      "@type": "Question",
+      "name": "How do I give the agents work?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Talk to them. Post a task in the coordination channel and an agent claims it, works it, and reports back. Each agent also has a standing role prompt it executes every iteration, so the fleet keeps making progress between your messages." }
+    }
+  ]
+}
+</script>
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Mona+Sans:wght@400..800&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-
-<script src="https://cdn.tailwindcss.com"></script>
-<script>
-  tailwind.config = {
-    corePlugins: { preflight: false },
-    theme: {
-      extend: {
-        fontFamily: {
-          sans: ["Mona Sans", "system-ui", "-apple-system", "Segoe UI", "sans-serif"],
-          mono: ["Spline Sans Mono", "ui-monospace", "SF Mono", "Menlo", "monospace"]
-        },
-        maxWidth: { content: "1152px", prose: "720px" }
-      }
-    }
-  };
-</script>
 
 <!-- ===================== clem design tokens (canonical) ===================== -->
 <style>
@@ -167,6 +186,20 @@ a{color:inherit;text-decoration:none}
 .nav-link{color:var(--clem-text-muted);font-size:14px;font-weight:500;transition:color var(--clem-duration-fast);display:inline-flex;align-items:center;gap:7px}
 .nav-link:hover{color:var(--clem-text-strong)}
 
+/* ---- faq ---- */
+.faq{background:var(--clem-surface);border:1px solid var(--clem-border);border-radius:var(--clem-radius-lg);transition:border-color var(--clem-duration-base)}
+.faq[open],.faq:hover{border-color:rgba(240,96,31,.30)}
+.faq summary{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 22px;cursor:pointer;list-style:none;font-size:16px;font-weight:600;color:var(--clem-text-strong);letter-spacing:-.01em}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::after{content:"+";font-family:var(--clem-font-mono);font-size:18px;font-weight:400;color:var(--clem-accent-text);flex-shrink:0;transition:transform var(--clem-duration-base) var(--clem-ease)}
+.faq[open] summary::after{transform:rotate(45deg)}
+.faq-body{padding:0 22px 20px;font-size:15px;line-height:1.65;color:var(--clem-text-muted)}
+.faq-body p{margin:0 0 12px}
+.faq-body p:last-child{margin-bottom:0}
+.faq-body a{color:var(--clem-link)}
+.faq-body a:hover{color:var(--clem-link-hover)}
+.faq-body code{font-family:var(--clem-font-mono);font-size:13px;color:var(--clem-orange-300);background:rgba(255,255,255,.04);border:1px solid var(--clem-border);border-radius:5px;padding:1px 6px}
+
 @media (prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}
   *{transition:none!important;animation:none!important}
@@ -216,6 +249,7 @@ a{color:inherit;text-decoration:none}
         <a class="nav-link" href="#security">Security model</a>
         <a class="nav-link" href="#how">How it works</a>
         <a class="nav-link" href="#quickstart">Quickstart</a>
+        <a class="nav-link" href="#faq">FAQ</a>
         <a class="nav-link" href="https://discord.gg/pR4qeMH4u4"><svg class="ic" style="width:17px;height:17px"><use href="#i-discord"/></svg>Discord</a>
         <span style="display:inline-flex;align-items:center">
           <a class="github-button" href="https://github.com/jahwag/clem" data-color-scheme="no-preference: dark; light: dark; dark: dark;" data-icon="octicon-star" data-show-count="true" aria-label="Star jahwag/clem on GitHub">Star</a>
@@ -230,6 +264,7 @@ a{color:inherit;text-decoration:none}
         <a class="nav-link" href="#security" style="padding:10px 0">Security model</a>
         <a class="nav-link" href="#how" style="padding:10px 0">How it works</a>
         <a class="nav-link" href="#quickstart" style="padding:10px 0">Quickstart</a>
+        <a class="nav-link" href="#faq" style="padding:10px 0">FAQ</a>
         <a class="nav-link" href="https://discord.gg/pR4qeMH4u4" style="padding:10px 0"><svg class="ic" style="width:17px;height:17px"><use href="#i-discord"/></svg>Discord</a>
         <a class="btn btn-ghost" href="https://github.com/jahwag/clem" style="margin-top:8px;justify-content:center"><svg class="ic" style="width:16px;height:16px"><use href="#i-github"/></svg>Star on GitHub</a>
       </div>
@@ -706,8 +741,104 @@ agents:
     </div>
   </section>
 
+  <!-- ====================== FAQ ====================== -->
+  <section id="faq" style="background:var(--clem-bg-sunken);border-top:1px solid var(--clem-border)">
+    <div class="wrap" style="padding-top:96px;padding-bottom:96px;max-width:760px">
+      <div style="text-align:center;margin:0 auto 44px">
+        <div class="eyebrow" style="margin-bottom:14px">FAQ</div>
+        <h2 style="font-size:clamp(28px,4vw,40px);font-weight:700;letter-spacing:-.03em;line-height:1.1;margin:0 0 14px;color:var(--clem-text-strong)">
+          The questions people actually ask.
+        </h2>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <details class="faq" open>
+          <summary>Why not just run Claude Code in a container?</summary>
+          <div class="faq-body">
+            <p>
+              A container is a process boundary, and it's usually configured for convenience: blanket outbound
+              network, a shared kernel, and sandbox settings the workload can often influence. clem puts the
+              boundary <strong style="color:var(--clem-text)">below</strong> the agent instead. You pick a
+              disposition per agent: a per-UID <code>nftables</code> rule that pins every outbound byte to an
+              auditing proxy, or a secret-zero broker where the real credentials live with a
+              <em style="font-style:normal;color:var(--clem-text)">different OS user</em>. Either way the
+              enforcement is owned by root or another user — the agent can't disable a firewall it doesn't own or
+              read another user's files, and there's no <code>--dangerously-skip</code> flag for it to talk
+              itself into.
+            </p>
+            <p>
+              clem also provisions the half containers don't: per-agent git and GitHub identity, Discord/Slack
+              coordination, and a watchdog. The full comparison is in the
+              <a href="https://github.com/jahwag/clem/blob/main/docs/threat-model.md">threat model</a>.
+            </p>
+          </div>
+        </details>
+
+        <details class="faq">
+          <summary>Is running Claude Code this way allowed by Anthropic's terms?</summary>
+          <div class="faq-body">
+            <p>
+              clem runs the <strong style="color:var(--clem-text)">unmodified official Claude Code CLI</strong>
+              under your own account, on hardware you own — it loops the same binary you'd run by hand, and
+              Anthropic itself ships headless and CI integrations of Claude Code.
+            </p>
+            <p>
+              clem makes no compliance claims either way. Read Anthropic's
+              <a href="https://www.anthropic.com/legal/aup" rel="noopener">Usage Policy</a> and the
+              <a href="https://www.anthropic.com/legal/consumer-terms" rel="noopener">Consumer</a> /
+              <a href="https://www.anthropic.com/legal/commercial-terms" rel="noopener">Commercial Terms</a>
+              and decide for your own setup.
+            </p>
+          </div>
+        </details>
+
+        <details class="faq">
+          <summary>What do I need to run a fleet?</summary>
+          <div class="faq-body">
+            <p>
+              Any Linux host with <code>systemd</code>: a spare laptop, a Raspberry Pi, a home server, a small VPS.
+              Agents spend most of their time waiting on the model API, so CPU and RAM needs are modest.
+            </p>
+            <p>
+              Beyond that: a Claude Code login or API key per agent (<code>clem login</code> walks each one
+              through it), and a Discord or Slack space for coordination.
+            </p>
+          </div>
+        </details>
+
+        <details class="faq">
+          <summary>What can a compromised agent actually reach?</summary>
+          <div class="faq-body">
+            <p>
+              Its own home directory and whatever you allow-listed — by design. An egress-contained agent has every
+              outbound byte pinned to an auditing proxy by a kernel rule it can't rewrite; a brokered agent holds
+              only placeholders, with the real credentials kept by a separate user it can't read.
+            </p>
+            <p>
+              Just as important is what clem does <em style="font-style:normal;color:var(--clem-text)">not</em>
+              protect against — the
+              <a href="https://github.com/jahwag/clem/blob/main/docs/threat-model.md">threat model</a> states the
+              guarantees and the explicit non-goals.
+            </p>
+          </div>
+        </details>
+
+        <details class="faq">
+          <summary>How do I give the agents work?</summary>
+          <div class="faq-body">
+            <p>
+              Talk to them. Post a task in the coordination channel and an agent claims it, works it, and reports
+              back. Each agent also has a standing role prompt it executes every iteration, so the fleet keeps
+              making progress between your messages.
+            </p>
+          </div>
+        </details>
+      </div>
+    </div>
+  </section>
+
   <!-- ====================== FINAL CTA ====================== -->
-  <section id="quickstart" style="background:var(--clem-bg-sunken);border-top:1px solid var(--clem-border)">
+  <section id="quickstart" style="border-top:1px solid var(--clem-border)">
     <div class="wrap" style="padding-top:88px;padding-bottom:88px;text-align:center;max-width:760px">
       <h2 style="font-size:clamp(30px,5vw,46px);font-weight:700;letter-spacing:-.03em;line-height:1.08;margin:0 0 14px;color:var(--clem-text-strong)">Run your fleet.</h2>
       <p style="font-size:18px;color:var(--clem-text-muted);margin:0 0 32px;line-height:1.6">
@@ -753,6 +884,7 @@ agents:
         <span style="color:var(--clem-text-subtle);font-size:13px;margin-left:6px">© 2026 · MIT licensed</span>
       </div>
       <div style="display:flex;align-items:center;gap:24px">
+        <a class="nav-link" style="font-size:13.5px;color:var(--clem-text-subtle)" href="https://github.com/jahwag/clem/blob/main/docs/threat-model.md">Threat model</a>
         <a class="nav-link" style="font-size:13.5px;color:var(--clem-text-subtle)" href="https://github.com/jahwag/clem">jahwag/clem</a>
         <a class="nav-link" style="font-size:13.5px;color:var(--clem-text-subtle)" href="https://github.com/jahwag/clem"><svg class="ic" style="width:15px;height:15px"><use href="#i-github"/></svg>GitHub</a>
         <a class="nav-link" style="font-size:13.5px;color:var(--clem-text-subtle)" href="https://discord.gg/pR4qeMH4u4"><svg class="ic" style="width:16px;height:16px"><use href="#i-discord"/></svg>Discord</a>
