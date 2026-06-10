@@ -13,7 +13,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const latestReleaseURL = "https://api.github.com/repos/jahwag/clem/releases/latest"
+// latestReleaseURL is a var so tests can point it at an httptest server.
+var latestReleaseURL = "https://api.github.com/repos/jahwag/clem/releases/latest"
 
 var updateCmd = &cobra.Command{
 	Use:   "update",

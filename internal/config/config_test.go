@@ -36,6 +36,163 @@ agents:
     model: "claude-sonnet-4-6"` + cavemanLine + "\n"
 }
 
+// TestLoad_RejectsUnknownKeys pins the strict-decoding contract: clem.yaml
+// carries security dispositions (egress, vault_broker, brokered_secrets,
+// permissions), so a misspelled key must be a load error, not a silent no-op
+// that leaves a containment control off.
+func TestLoad_RejectsUnknownKeys(t *testing.T) {
+	cases := []struct {
+		name    string
+		yaml    string
+		wantErr string // substring the error must carry to be actionable
+	}{
+		{"unknown top-level key", `
+project: myteam
+egresss:
+  enabled: true
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+agents:
+  lead:
+    name: "Lead"
+    model: "claude-sonnet-4-6"
+`, "egresss"},
+		{"unknown agent key", `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+agents:
+  lead:
+    name: "Lead"
+    model: "claude-sonnet-4-6"
+    vault_brokerr: true
+`, "vault_brokerr"},
+		{"unknown egress key", `
+project: myteam
+egress:
+  enabled: true
+  postures: strict
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+agents:
+  lead:
+    name: "Lead"
+    model: "claude-sonnet-4-6"
+`, "postures"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeYAML(t, tc.yaml)
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("Load should reject a config with an unknown key")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error should name the unknown field %q, got: %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// TestLoad_AllowsAnchorHolderExtensionKeys pins the escape hatch that keeps
+// strict decoding compatible with shared YAML anchors: top-level "x-" keys
+// are collected (not rejected), and merge keys referencing anchors defined in
+// them resolve into agents as usual.
+func TestLoad_AllowsAnchorHolderExtensionKeys(t *testing.T) {
+	yaml := `
+project: myteam
+x-defaults: &defaults
+  model: "claude-sonnet-4-6"
+  iteration: 7m
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+agents:
+  lead:
+    <<: *defaults
+    name: "Lead"
+  worker:
+    <<: *defaults
+    name: "Worker"
+    iteration: 3m
+`
+	cfg, err := Load(writeYAML(t, yaml))
+	if err != nil {
+		t.Fatalf("x- anchor holder + merge keys should load: %v", err)
+	}
+	if cfg.Agents["lead"].Model != "claude-sonnet-4-6" || cfg.Agents["lead"].Iteration != "7m" {
+		t.Errorf("merge key did not apply to lead: %+v", cfg.Agents["lead"])
+	}
+	if cfg.Agents["worker"].Iteration != "3m" {
+		t.Errorf("explicit field should override merged default: %+v", cfg.Agents["worker"])
+	}
+}
+
+// TestLoad_ValidatesModel pins the runner-safety validation for model: the
+// value is rendered into a single-quoted --model shell argument in runner.sh,
+// so the charset is restricted to what real model IDs use (consistent with
+// the git_email / web_terminal_bind / resource_limits validation). Agent
+// name/role validation is control-char-only by design — shell metacharacters
+// are escaped at the render sites instead (see agentNameInvalid and
+// TestLoad_AgentNameRoleRejectControlCharacters).
+func TestLoad_ValidatesModel(t *testing.T) {
+	mk := func(model string) string {
+		return fmt.Sprintf(`
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+agents:
+  lead:
+    name: "Amara"
+    model: %q
+`, model)
+	}
+	valid := []string{
+		"claude-sonnet-4-6",
+		"qwen2.5:7b-instruct",
+		"library/model:tag",
+		"claude-sonnet-4-6@20250514", // Vertex version suffix
+		"arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-6",
+		"", // unset stays legal
+	}
+	for _, model := range valid {
+		if _, err := Load(writeYAML(t, mk(model))); err != nil {
+			t.Errorf("model=%q should load, got: %v", model, err)
+		}
+	}
+	invalid := []string{
+		"sonnet' --dangerously-x '", // quote breaks out of --model '...'
+		"model with spaces",
+		"model$(reboot)",
+		"model\nnewline",
+	}
+	for _, model := range invalid {
+		if _, err := Load(writeYAML(t, mk(model))); err == nil {
+			t.Errorf("model=%q should be rejected", model)
+		}
+	}
+}
+
+// TestLoad_EmptyFileStillReportsMissingProject pins that strict decoding's
+// io.EOF on an empty document degrades to the original "missing project"
+// error rather than a confusing decode failure.
+func TestLoad_EmptyFileStillReportsMissingProject(t *testing.T) {
+	path := writeYAML(t, "")
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "project") {
+		t.Errorf("want missing-project error for empty config, got: %v", err)
+	}
+}
+
 func TestCavemanLevel_StringLevels(t *testing.T) {
 	cases := []struct {
 		yaml    string
@@ -1032,7 +1189,6 @@ agents:
 	}
 }
 
-
 func TestLoad_EgressParsed(t *testing.T) {
 	path := writeYAML(t, `
 project: myteam
@@ -1658,7 +1814,7 @@ func TestValidateMCPSidecars_AgentVaultPortCollision(t *testing.T) {
 
 func TestSidecarListeners_SharedAndUnsubscribed(t *testing.T) {
 	cfg := &Config{
-		Project:     "myteam",
+		Project: "myteam",
 		MCPSidecars: MCPSidecarsConfig{BasePort: 14500, Servers: []SidecarServer{
 			{Name: "es-ro", Identity: "shared", Command: "/bin/x", Secrets: []string{"K"}},
 			{Name: "unused", Identity: "shared", Command: "/bin/x", Secrets: []string{"K"}},
@@ -1682,7 +1838,7 @@ func TestSidecarListeners_SharedAndUnsubscribed(t *testing.T) {
 
 func TestSidecarListeners_PerAgentOnePortEach(t *testing.T) {
 	cfg := &Config{
-		Project:     "myteam",
+		Project: "myteam",
 		MCPSidecars: MCPSidecarsConfig{BasePort: 14500, Servers: []SidecarServer{
 			{Name: "disc", Identity: "per-agent", Command: "/bin/x", Secrets: []string{"DISCORD_TOKEN"}},
 		}},
