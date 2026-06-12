@@ -95,7 +95,9 @@ func Substitute(content string, cfg *config.Config, agentKey string) string {
 		"{{agent.role}}", ac.Role,
 		"{{operator.discord_ids}}", strings.Join(cfg.Operator.DiscordIDs, ", "),
 		"{{operator.github_logins}}", strings.Join(cfg.Operator.GitHubLogins, ", "),
-		"{{coordination.github_repo}}", cfg.Coordination.GithubRepo,
+	}
+	if cfg.UsesGitHubCoordination() {
+		pairs = append(pairs, "{{coordination.github_repo}}", cfg.Coordination.GithubRepo)
 	}
 	for name, id := range cfg.Coordination.Channels {
 		pairs = append(pairs, fmt.Sprintf("{{channels.%s}}", name), id)

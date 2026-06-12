@@ -131,7 +131,7 @@ Both layers are **opt-in and default-off**; existing fleets are unaffected until
 - A coordination backend (pick one):
   - **Discord** - a private server + one bot token per agent, or
   - **Slack** - a workspace + one Slack app per agent (bot user token `xoxb-…`), or
-  - **GitHub Issues** - a task-board repo with `clem:*` labels + `GITHUB_TOKEN` per agent (same token used for PRs)
+  - **GitHub Issues** - a task-board repo with `clem:*` labels + `GH_TOKEN` per agent (same token used for PRs)
 
 ---
 
@@ -275,7 +275,7 @@ Use GitHub Issues as the task board instead of Discord or Slack. Agents discover
 1. A task-board repository (can be separate from the code repos agents edit).
 2. Labels on that repo: `clem:todo`, `clem:in-progress`, `clem:done`, `clem:blocked`.
 3. Two meta-issues for watchdog alerts and post-mortems; note their issue numbers.
-4. `gh` CLI on the host and `GITHUB_TOKEN` in each agent's vault (see [GitHub credentials](#github-credentials)).
+4. `gh` CLI on the host and `GH_TOKEN` in each agent's vault (see [GitHub credentials](#github-credentials)).
 
 **Scaffold:**
 
@@ -319,7 +319,7 @@ agents:
 - `clem-<project>-<agent>.service` - agent runner (unchanged)
 - `clem-github-watch-<project>-<agent>.service` - polls for unassigned `clem:todo` issues every 60s and sends `tmux send-keys` to wake the agent
 
-With `egress:` enabled, `api.github.com` is included in the default allowlist. The watcher respects the same loopback proxy as the agent.
+With `egress:` enabled, `api.github.com` is automatically added to the egress allowlist when `backend: github`. The watcher respects the same loopback proxy as the agent.
 
 Full walkthrough: [`samples/github-tasks/README.md`](samples/github-tasks/README.md).
 
@@ -481,7 +481,7 @@ Inspect the service: `systemctl status clem-<project>-<agentkey>.service`. Commo
 Check `clem logs <agent>`. The runner logs MCP server startup. If `mcp-discord` is missing, install with `pipx` (recommended) so its dependencies live in an isolated venv: `pipx install git+https://github.com/Bytelope/mcp-discord.git`. Avoid `pip install --break-system-packages` for Python MCP servers - the agent service runs with `ProtectHome=read-only`, so any later dependency drift (e.g. a system `pydantic-core` upgrade desyncing from the wheel an MCP server was built against) cannot be self-healed from inside the sandbox and the MCP will fail to boot. `pipx` venvs decouple each MCP from system Python state and survive `apt upgrade`. Confirm the bot was invited to the server. **`DISCORD_TOKEN` must be the raw token** (no `Bot ` prefix); `discord.py` adds it internally - pasting `"Bot …"` yields 401. For Slack: use a bot token (`xoxb-`), not a user token (`xoxp-`) - user tokens post as you, not the bot.
 
 **Agent not picking up GitHub tasks**  
-Confirm `coordination.backend: github`, `github_repo`, and `channels.tasks` are set. Check the watcher: `systemctl status clem-github-watch-<project>-<agent>.service` and `~/<agent>-github-watch.log` under the agent's home. The watcher needs `GITHUB_TOKEN` in the agent's `.env`. Open issues must have the tasks label and no assignee. With `egress:` enabled, ensure `api.github.com` is reachable through the proxy (included in default domains).
+Confirm `coordination.backend: github`, `github_repo`, and `channels.tasks` are set. Check the watcher: `systemctl status clem-github-watch-<project>-<agent>.service` and `~/.claude/<agent>-github-watch.log` under the agent's home. The watcher needs `GH_TOKEN` in the agent's `.env`. Open issues must have the tasks label and no assignee. With `egress:` enabled, ensure `api.github.com` is reachable through the proxy (automatically allowed when `backend: github`).
 
 **`clem login` keeps prompting daily / `clem status` flips to `EXPIRED` every 8 hours**  
 You probably ran a clem older than v0.8.4. The Claude Max access token genuinely lasts only ~8 hours, but Claude Code refreshes it automatically using the long-lived refresh token stored alongside it. Pre-0.8.4 `clem status` displayed the *access* token expiry and pre-0.8.4 `NeedsLogin` gated on a 7-day window - so it always reported "expired" and trained operators to log in daily for nothing. Upgrade to v0.8.4+; status now shows `auto-refresh` whenever a refresh token is present, and only reports `missing` when manual `clem login` is actually required.

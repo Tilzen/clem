@@ -11,7 +11,7 @@ when new claimable issues appear.
 - A task-board repository (can be separate from the repos agents edit)
 - Labels on that repo: `clem:todo`, `clem:in-progress`, `clem:done`, `clem:blocked`
 - Two meta-issues for alerts and post-mortems
-- `GITHUB_TOKEN` per agent in the vault (same token used for PRs)
+- `GH_TOKEN` per agent in the vault (same token used for PRs)
 
 ## Setup
 
@@ -66,7 +66,7 @@ sudo clem up
 
 ## Egress containment
 
-When `egress:` is enabled, `api.github.com` is in the default allowlist. The issue watcher
+When `egress:` is enabled, `api.github.com` is automatically added to the egress allowlist for `backend: github`. The issue watcher
 uses the same loopback proxy as the agent service.
 
 See also the [GitHub coordination section](../../README.md#github-coordination) in the main README.

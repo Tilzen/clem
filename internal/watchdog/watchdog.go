@@ -288,11 +288,12 @@ func GenerateScript(cfg *config.Config) string {
 	backend, _ := coordination.Known(cfg.Coordination.Backend) // validated at load time
 	// $msg is the bash local set by send_alert; RenderAlert expands it at
 	// runtime so the curl body matches the per-backend wire format.
-	alertCurl := coordination.RenderAlert(backend, coordination.AlertParams{
+	alertCurlBody := coordination.RenderAlert(backend, coordination.AlertParams{
 		Repo:    cfg.Coordination.GithubRepo,
 		Channel: alertChannel,
 		Message: "$safe_msg",
 	})
+	alertCurl := coordination.AlertCurlGuard(backend, alertChannel, alertCurlBody)
 
 	var checks strings.Builder
 	for _, key := range keys {

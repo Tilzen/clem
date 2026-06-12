@@ -5,7 +5,7 @@
 #   - Create a task repo (github_repo below) with labels:
 #       clem:todo, clem:in-progress, clem:done, clem:blocked
 #   - Open dedicated issues for alerts and lessons; set their numbers below.
-#   - GITHUB_TOKEN in each agent's vault (already required for PRs).
+#   - GH_TOKEN in each agent's vault (already required for PRs).
 
 project: sample
 

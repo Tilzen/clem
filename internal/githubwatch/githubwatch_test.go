@@ -107,7 +107,7 @@ HAD_STATE_FILE=$1
 OLD_IDS=$2
 NEW_IDS=$3
 if [ "$HAD_STATE_FILE" -eq 1 ]; then
-    if comm -13 <(echo "$OLD_IDS" | tr ' ' '\n' | sort -n) <(echo "$NEW_IDS" | tr ' ' '\n' | sort -n) | grep -q .; then
+    if comm -13 <(echo "$OLD_IDS" | tr ' ' '\n' | LC_ALL=C sort) <(echo "$NEW_IDS" | tr ' ' '\n' | LC_ALL=C sort) | grep -q .; then
         echo WAKE
     fi
 fi

@@ -66,7 +66,7 @@ func TestRenderAlert_GitHub(t *testing.T) {
 	})
 	for _, want := range []string{
 		`api.github.com/repos/owner/repo/issues/42/comments`,
-		`Authorization: Bearer $GITHUB_TOKEN`,
+		`Authorization: Bearer $GH_TOKEN`,
 		`alert body`,
 	} {
 		if !strings.Contains(got, want) {
@@ -77,7 +77,25 @@ func TestRenderAlert_GitHub(t *testing.T) {
 
 func TestGitHub_TokenEnvVar(t *testing.T) {
 	b, _ := Known("github")
-	if b.TokenEnvVar != "GITHUB_TOKEN" {
-		t.Fatalf("github TokenEnvVar = %q, want GITHUB_TOKEN", b.TokenEnvVar)
+	if b.TokenEnvVar != "GH_TOKEN" {
+		t.Fatalf("github TokenEnvVar = %q, want GH_TOKEN", b.TokenEnvVar)
+	}
+}
+
+func TestAlertCurlGuard_GitHubSkipsWhenAlertsUnset(t *testing.T) {
+	b, _ := Known("github")
+	got := AlertCurlGuard(b, "", `curl example`)
+	if got != "true" {
+		t.Fatalf("expected no-op when alerts unset, got %q", got)
+	}
+}
+
+func TestAlertCurlGuard_GitHubRequiresTokenAndIssue(t *testing.T) {
+	b, _ := Known("github")
+	got := AlertCurlGuard(b, "42", `curl example`)
+	for _, want := range []string{`[ -n "$GH_TOKEN" ]`, `[ -n "42" ]`, `curl example`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("AlertCurlGuard missing %q:\n%s", want, got)
+		}
 	}
 }

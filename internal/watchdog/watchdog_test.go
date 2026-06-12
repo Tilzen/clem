@@ -239,9 +239,9 @@ func TestGenerateScript_GitHubBackendAlertCurl(t *testing.T) {
 	cfg.Coordination.Channels["alerts"] = "42"
 	s := GenerateScript(cfg)
 	for _, want := range []string{
-		`if [ -n "$GITHUB_TOKEN" ] && [ -n "42" ]; then`,
+		`if [ -n "$GH_TOKEN" ] && [ -n "42" ]; then`,
 		`api.github.com/repos/owner/repo/issues/42/comments`,
-		`-H "Authorization: Bearer $GITHUB_TOKEN"`,
+		`-H "Authorization: Bearer $GH_TOKEN"`,
 		`-d "{\"body\":\"$safe_msg\"}"`,
 	} {
 		if !strings.Contains(s, want) {

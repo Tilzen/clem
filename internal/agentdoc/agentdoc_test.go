@@ -284,3 +284,12 @@ func TestSubstitute_GitHubRepo(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestSubstitute_GitHubRepoOmittedForDiscord(t *testing.T) {
+	cfg := testCfg()
+	cfg.Coordination.GithubRepo = "org/tasks"
+	got := Substitute("repo={{coordination.github_repo}}", cfg, "lead")
+	if got != "repo={{coordination.github_repo}}" {
+		t.Errorf("got %q", got)
+	}
+}

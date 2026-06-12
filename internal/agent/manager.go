@@ -468,12 +468,34 @@ const SecretCodePatternRegex = `os\.Getenv\("(GH_TOKEN|DISCORD_TOKEN|ANTHROPIC_A
 // hidden instructions or text past human review. Zero-width chars (U+200B-F),
 // bidi overrides (U+2028-E), and BOM (U+FEFF) should never appear in source
 // code or config and flag a likely injection attempt when they do.
+// This is the rune-level reference pattern used by Go code and tests; the
+// bash hook matches the equivalent UTF-8 byte sequences instead — see
+// UnicodeTrapBytesPattern for why.
 const UnicodeTrapRegex = `[\x{200B}-\x{200F}\x{2028}-\x{202E}\x{FEFF}]`
+
+// UnicodeTrapBytesPattern is the byte-level ERE equivalent of
+// UnicodeTrapRegex, written as bash printf octal escapes over the UTF-8
+// encodings of the trap code points. The hook must match raw bytes because
+// `grep -P` with \x{...} above 0xFF is a UTF-8-locale feature: under LANG=C —
+// the default environment for systemd services, and therefore for every agent
+// tmux session — PCRE2 rejects the pattern ("character code point value in
+// \x{} or \o{} is too large"), grep exits non-zero, and the unicode-trap pass
+// silently never blocks. Byte matching under LC_ALL=C works in any locale.
+//
+//	\342\200[\213-\217]  = E2 80 8B..8F = U+200B..U+200F (zero-width, direction marks)
+//	\342\200[\250-\256]  = E2 80 A8..AE = U+2028..U+202E (line/para separators, bidi overrides)
+//	\357\273\277         = EF BB BF     = U+FEFF (BOM)
+//
+// Kept in sync with UnicodeTrapRegex by
+// TestUnicodeTrapBytesPattern_AgreesWithUnicodeTrapRegex.
+const UnicodeTrapBytesPattern = `\342\200[\213-\217\250-\256]|\357\273\277`
 
 // prePushHookContent is the pre-push hook installed for every agent user.
 // Pure bash + grep + base64 (from coreutils); no gitleaks dependency. The
 // regexes come from SecretPatternRegex, SecretCodePatternRegex, and
-// UnicodeTrapRegex so Go tests and the bash hook share one source of truth.
+// UnicodeTrapBytesPattern so Go tests and the bash hook share one source of
+// truth. The hook runs under LC_ALL=C so its matching is identical on every
+// host regardless of locale.
 //
 // Passes:
 //  1. Literal credential patterns (tokens, keys, PEM blocks).
@@ -489,20 +511,20 @@ const UnicodeTrapRegex = `[\x{200B}-\x{200F}\x{2028}-\x{202E}\x{FEFF}]`
 // when forks legitimately need to sync history that contains test fixtures
 // for the very regexes we install:
 //
-//   a. Only ADDED diff lines (lines starting with `+`, excluding the
-//      `+++ b/path` file headers) are scanned. A removed line cannot
-//      introduce a secret to the remote even if it textually matches —
-//      it was already there. This eliminates the most common false
-//      positive: cumulative-diff fork-sync where an unannotated old
-//      version of a fixture line is being replaced by an annotated new
-//      version, and both versions appear in the diff.
+//	a. Only ADDED diff lines (lines starting with `+`, excluding the
+//	   `+++ b/path` file headers) are scanned. A removed line cannot
+//	   introduce a secret to the remote even if it textually matches —
+//	   it was already there. This eliminates the most common false
+//	   positive: cumulative-diff fork-sync where an unannotated old
+//	   version of a fixture line is being replaced by an annotated new
+//	   version, and both versions appear in the diff.
 //
-//   b. Lines containing the literal marker `clem:allow-secret` are
-//      dropped before scanning. This is the documented escape hatch for
-//      legitimate test fixtures (e.g. positives tables for the hook's
-//      own regex tests). The marker is namespaced to avoid colliding
-//      with prose mentions and is scoped to the same line as the
-//      secret-shaped string. Pass 3 ignores the marker by design.
+//	b. Lines containing the literal marker `clem:allow-secret` are
+//	   dropped before scanning. This is the documented escape hatch for
+//	   legitimate test fixtures (e.g. positives tables for the hook's
+//	   own regex tests). The marker is namespaced to avoid colliding
+//	   with prose mentions and is scoped to the same line as the
+//	   secret-shaped string. Pass 3 ignores the marker by design.
 const PrePushAllowSecretMarker = "clem:allow-secret"
 
 var prePushHookContent = fmt.Sprintf(`#!/bin/bash
@@ -517,10 +539,20 @@ var prePushHookContent = fmt.Sprintf(`#!/bin/bash
 # any line carrying the marker '%s' is skipped. Pass 3 scans every line
 # regardless because hidden-character smuggling has no legitimate use.
 
+# Byte-exact matching regardless of host locale. Agent sessions run under
+# systemd (no LANG set, i.e. the C locale), where PCRE \x{...} above 0xFF
+# fails outright and locale-dependent ranges can shift. Every pattern below is
+# ASCII or raw UTF-8 bytes, so the C locale is the correct, portable choice.
+export LC_ALL=C
+
 zero="0000000000000000000000000000000000000000"
 patterns='%s'
 code_patterns='%s'
-unicode_traps='%s'
+# Unicode traps as raw UTF-8 byte sequences (printf expands the octal escapes):
+# U+200B-U+200F, U+2028-U+202E, U+FEFF. Matched with plain grep -E on bytes -
+# PCRE \x{} code points above 0xFF need a UTF-8 locale and silently fail under
+# LANG=C, which is what systemd services (and thus agent sessions) run with.
+unicode_traps=$(printf '%s')
 allow_marker='%s'
 
 # extract_added prints diff lines that introduce content on the remote:
@@ -569,8 +601,9 @@ while read local_ref local_sha remote_ref remote_sha; do
 
   # Pass 3: unicode traps. Scans the entire diff (added + removed +
   # context) since hidden control characters never have a legitimate
-  # source-code use; allow-marker intentionally ignored.
-  uhits=$(echo "$diff" | grep -P "$unicode_traps" | head -3)
+  # source-code use; allow-marker intentionally ignored. -a forces text
+  # mode so grep cannot demote a trap-bearing diff to "binary file matches".
+  uhits=$(echo "$diff" | grep -aE "$unicode_traps" | head -3)
   if [ -n "$uhits" ]; then
     echo "clem pre-push hook: push blocked - unicode control/override characters detected in $range (possible prompt-injection smuggling)" >&2
     echo "$uhits" | sed 's/^/  /' >&2
@@ -591,7 +624,7 @@ while read local_ref local_sha remote_ref remote_sha; do
   fi
 done
 exit 0
-`, PrePushAllowSecretMarker, SecretPatternRegex, SecretCodePatternRegex, UnicodeTrapRegex, PrePushAllowSecretMarker)
+`, PrePushAllowSecretMarker, SecretPatternRegex, SecretCodePatternRegex, UnicodeTrapBytesPattern, PrePushAllowSecretMarker)
 
 // stripGitConfigKey removes every line of `content` whose leading text is
 // "\t<key> = ". Used to clear stale name/email entries before re-writing them
@@ -1203,6 +1236,143 @@ func InstallSkill(username string, s config.SkillConfig) error {
 	}
 	ChownPath(skillDir, username)
 	return nil
+}
+
+// SyncSkillsRepo clones (or pulls) repoURL into <homeDir>/.cache/<repoName>/
+// as the agent user, then symlinks every subdir under shared/ and <agentKey>/
+// into <homeDir>/.claude/skills/<name>. Symlinks pointing into the cache that
+// no longer resolve are pruned, so removing a skill in the repo propagates on
+// next sync. Idempotent.
+//
+// repoURL is any URL git clone understands (https, ssh, git@host:path).
+// agentKey selects which per-agent subdir to surface. Top-level dirs other
+// than shared and the agent's key are ignored.
+//
+// Skill name must match extensionNameRe (alphanumeric plus . _ -); invalid
+// names are skipped with a logged warning. The repo is operator-PR-reviewed,
+// so this is defense in depth, not the primary trust boundary.
+//
+// Called from provision (running as root); each shell-out is sudo-wrapped to
+// run as the agent user so files land with correct ownership.
+func SyncSkillsRepo(username, homeDir, agentKey, repoURL string) error {
+	run := func(name string, args ...string) ([]byte, error) {
+		return sys.Run("sudo", append([]string{"-iu", username, name}, args...)...)
+	}
+	mkDir := func(path string) error { return EnsureOwnedDir(path, username) }
+	return syncSkillsCommon(homeDir, agentKey, repoURL, run, mkDir)
+}
+
+// SyncSkillsRepoAsSelf is the runtime variant. Called by the runner inside
+// each iteration as the agent user, so no sudo wrapping. Dirs created
+// directly via os.MkdirAll (they land owned by the calling user).
+//
+// This is the loop that lets agent-authored skills land without re-running
+// `clem provision`: PR → merge → next iteration's runner pulls and re-symlinks
+// before launching the TUI.
+func SyncSkillsRepoAsSelf(homeDir, agentKey, repoURL string) error {
+	run := sys.Run
+	mkDir := func(path string) error { return os.MkdirAll(path, 0755) }
+	return syncSkillsCommon(homeDir, agentKey, repoURL, run, mkDir)
+}
+
+type cmdRunner func(name string, args ...string) ([]byte, error)
+
+func syncSkillsCommon(homeDir, agentKey, repoURL string, run cmdRunner, mkDir func(string) error) error {
+	repoName := skillsCacheName(repoURL)
+	cache := filepath.Join(homeDir, ".cache", repoName)
+	skillsDir := filepath.Join(homeDir, ".claude", "skills")
+
+	if _, err := os.Stat(cache); os.IsNotExist(err) {
+		if err := mkDir(filepath.Dir(cache)); err != nil {
+			return fmt.Errorf("ensuring cache parent: %w", err)
+		}
+		out, err := run("git", "clone", repoURL, cache)
+		if err != nil {
+			return fmt.Errorf("cloning skills repo %s: %w\n%s", repoURL, err, out)
+		}
+	} else {
+		out, err := run("git", "-C", cache, "pull", "--ff-only")
+		if err != nil {
+			return fmt.Errorf("pulling skills repo: %w\n%s", err, out)
+		}
+	}
+
+	if err := mkDir(skillsDir); err != nil {
+		return fmt.Errorf("ensuring skills dir: %w", err)
+	}
+
+	expected := make(map[string]string)
+	for _, src := range []string{"shared", agentKey} {
+		srcDir := filepath.Join(cache, src)
+		entries, err := os.ReadDir(srcDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("reading %s: %w", srcDir, err)
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			name := filepath.Base(e.Name())
+			if !config.IsValidExtensionName(name) {
+				fmt.Printf("  warning: skipping skill %q in %s (invalid name)\n", name, src)
+				continue
+			}
+			if prior, dup := expected[name]; dup {
+				fmt.Printf("  warning: skill %q in %s collides with %s; keeping first\n", name, src, prior)
+				continue
+			}
+			target := filepath.Join(srcDir, name)
+			link := filepath.Join(skillsDir, name)
+			if out, err := run("ln", "-sfn", target, link); err != nil {
+				return fmt.Errorf("symlinking skill %s: %w\n%s", name, err, out)
+			}
+			expected[name] = src
+		}
+	}
+
+	pruneStaleSkillSymlinks(skillsDir, cache, expected, run)
+	return nil
+}
+
+// skillsCacheName extracts the cache-directory name from a git URL: last
+// path segment with any trailing .git stripped. Handles https://host/a/b.git,
+// ssh://git@host/a/b, and scp-style git@host:a/b.git.
+func skillsCacheName(repoURL string) string {
+	s := strings.TrimSuffix(repoURL, "/")
+	if i := strings.LastIndexAny(s, "/:"); i >= 0 {
+		s = s[i+1:]
+	}
+	return strings.TrimSuffix(s, ".git")
+}
+
+// pruneStaleSkillSymlinks removes symlinks in skillsDir that point into the
+// cache dir but are no longer backed by an expected skill. Non-symlinks (real
+// dirs from InstallSkill) and links pointing outside the cache are left alone.
+func pruneStaleSkillSymlinks(skillsDir, cache string, expected map[string]string, run cmdRunner) {
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if _, kept := expected[name]; kept {
+			continue
+		}
+		full := filepath.Join(skillsDir, name)
+		target, err := os.Readlink(full)
+		if err != nil {
+			continue
+		}
+		if !strings.HasPrefix(target, cache+string(filepath.Separator)) {
+			continue
+		}
+		if out, err := run("rm", "-f", full); err != nil {
+			fmt.Printf("  warning: removing stale skill symlink %s: %v\n%s", full, err, out)
+		}
+	}
 }
 
 // SetMCPServers overwrites the mcpServers key in ~/.claude/settings.json while

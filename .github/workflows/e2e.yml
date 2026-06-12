@@ -22,6 +22,9 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # Pinned for determinism (matches ci.yml). The provisioned hook itself
+  # forces LC_ALL=C internally, so assertions here don't depend on locale.
+  LANG: "C.UTF-8"
 
 jobs:
   provision:
@@ -378,7 +381,7 @@ jobs:
               vaults: [github]
           EOF
           "$GITHUB_WORKSPACE/clem" vault init
-          "$GITHUB_WORKSPACE/clem" vault set github GITHUB_TOKEN=ghfakefortestingonly
+          "$GITHUB_WORKSPACE/clem" vault set github GH_TOKEN=ghfakefortestingonly
 
       - name: Run clem provision
         run: |

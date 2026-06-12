@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"encoding/json"
 	"fmt"
 	"os/user"
 	"sort"
@@ -141,6 +142,8 @@ while true; do
     log "Updating claude"
     "$CLAUDE" install 2>&1 | tail -5 | tee -a "$LOGFILE" || log "claude install failed, continuing with current version"
 
+    {{.SkillsSyncCmd}}
+
     log "Starting {{.AgentName}} (fresh session)"
     (sleep 1 && tmux send-keys -t {{.AgentKey}} "" Enter
      sleep 25 && tmux send-keys -l -t {{.AgentKey}} "$PROMPT"
@@ -264,6 +267,8 @@ while true; do
             {{.AlertCurl}}
         fi
     fi
+
+    {{.SkillsSyncCmd}}
 
     log "Starting {{.AgentName}} (opencode, fresh session)"
     MODEL_ARG=""
@@ -393,6 +398,27 @@ type RunnerParams struct {
 	// GitHubWatchUnitDeps is the Wants= block tying the agent to the GitHub
 	// issue watcher sidecar when coordination.backend is github.
 	GitHubWatchUnitDeps string
+	// SkillsSyncCmd is the shell snippet invoked at the top of every iteration
+	// to refresh the agent's ~/.claude/skills/ symlinks from the team skills
+	// repo. Empty when cfg.SkillsRepo is unset, in which case no sync runs.
+	SkillsSyncCmd string
+}
+
+// bashDoubleQuoteEscaper escapes the four characters that stay live inside a
+// bash double-quoted string.
+var bashDoubleQuoteEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `\$`, "`", "\\`")
+
+// escapeForAlert escapes a value for the AlertCurl sink, where it sits inside
+// a JSON string that is itself inside a bash double-quoted argument
+// (AlertTemplate's -d "{\"content\":\"%s\"}"). Bash dequotes the argument
+// first, then the chat API parses the JSON, so the value needs both layers of
+// escaping applied innermost-first: JSON string escaping (via json.Marshal,
+// which also covers control characters), then bash's \ " $ `. The static
+// parts of the alert message rely on that bash layer (${SIZE} expands at
+// runtime), which is why the sink cannot simply switch to single quotes.
+func escapeForAlert(s string) string {
+	j, _ := json.Marshal(s) // marshaling a string never errors
+	return bashDoubleQuoteEscaper.Replace(string(j[1 : len(j)-1]))
 }
 
 // Generate renders the runner.sh content for an agent. Dispatches on the
@@ -421,17 +447,24 @@ func Generate(cfg *config.Config, agentKey string) string {
 
 	alertChannel := cfg.Coordination.Channels["alerts"]
 	backend, _ := coordination.Known(cfg.Coordination.Backend) // validated at load time
-	alertMsg := fmt.Sprintf(`⚠️ %s: CLAUDE.local.md is ${SIZE} bytes (>${MAX_CLAUDE_MD_BYTES}). Trim it to reduce token waste.`, ac.Name)
+	alertMsg := fmt.Sprintf(`⚠️ %s: CLAUDE.local.md is ${SIZE} bytes (>${MAX_CLAUDE_MD_BYTES}). Trim it to reduce token waste.`, escapeForAlert(ac.Name))
 	alertCurlBody := coordination.RenderAlert(backend, coordination.AlertParams{
 		Repo:    cfg.Coordination.GithubRepo,
 		Channel: alertChannel,
 		Message: alertMsg,
 	})
-	alertCurl := fmt.Sprintf(`[ -n "$%s" ] && %s`, backend.TokenEnvVar, alertCurlBody)
+	alertCurl := coordination.AlertCurlGuard(backend, alertChannel, alertCurlBody)
 
 	subagentExport := ""
 	if ac.SubagentModel != "" {
 		subagentExport = fmt.Sprintf("export CLAUDE_CODE_SUBAGENT_MODEL=%q", ac.SubagentModel)
+	}
+	skillsSyncCmd := ""
+	if cfg.SkillsRepo != "" {
+		skillsSyncCmd = fmt.Sprintf(
+			`clem sync-skills --home "$HOME" --agent-key %q --repo %q 2>&1 | tee -a "$LOGFILE" || log "skills sync failed"`,
+			agentKey, cfg.SkillsRepo,
+		)
 	}
 	p := RunnerParams{
 		Project:        cfg.Project,
@@ -448,14 +481,15 @@ func Generate(cfg *config.Config, agentKey string) string {
 		// guaranteed a cache miss every session — same session count cut
 		// you'd get from cold-cache cost increase. Match active to keep cache
 		// hot, or override per-iteration in clem.yaml directly.
-		SleepNight:          iterSec,
-		AlertChannel:        alertChannel,
-		AlertCurl:           alertCurl,
-		WatchChannelIDs:     watchChannelIDs(cfg),
-		CoordinationBackend: cfg.Coordination.BackendOrDefault(),
-		GitHubWatchUnitDeps: githubWatchUnitDeps(cfg, agentKey),
-		ProxyExport:         proxyExportBlock(cfg, agentKey),
-		SidecarServers:      sidecarServersLiteral(cfg, agentKey),
+		SleepNight:            iterSec,
+		AlertChannel:          alertChannel,
+		AlertCurl:             alertCurl,
+		WatchChannelIDs:       watchChannelIDs(cfg),
+		CoordinationBackend:   cfg.Coordination.BackendOrDefault(),
+		GitHubWatchUnitDeps:   githubWatchUnitDeps(cfg, agentKey),
+		ProxyExport:           proxyExportBlock(cfg, agentKey),
+		SidecarServers:        sidecarServersLiteral(cfg, agentKey),
+		SkillsSyncCmd:         skillsSyncCmd,
 	}
 	switch ac.RuntimeKind() {
 	case "opencode":
@@ -615,6 +649,7 @@ func renderTemplate(tmpl string, p RunnerParams) string {
 		"{{.SidecarServers}}", p.SidecarServers,
 		"{{.CoordinationBackend}}", p.CoordinationBackend,
 		"{{.GitHubWatchUnitDeps}}", p.GitHubWatchUnitDeps,
+		"{{.SkillsSyncCmd}}", p.SkillsSyncCmd,
 	)
 	return r.Replace(tmpl)
 }

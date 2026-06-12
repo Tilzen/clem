@@ -72,8 +72,8 @@ maybe_wake() {
 }
 
 poll_once() {
-    if [ -z "$GITHUB_TOKEN" ]; then
-        log "GITHUB_TOKEN unset — skipping poll"
+    if [ -z "$GH_TOKEN" ]; then
+        log "GH_TOKEN unset — skipping poll"
         return
     fi
     load_state
@@ -83,7 +83,7 @@ poll_once() {
     trap 'rm -f "$hdr" "$body"' RETURN
     local -a curl_args=(
         -sS -D "$hdr" -o "$body" -w '%{http_code}'
-        -H "Authorization: Bearer $GITHUB_TOKEN"
+        -H "Authorization: Bearer $GH_TOKEN"
         -H "Accept: application/vnd.github+json"
     )
     [ -n "$ETAG" ] && curl_args+=(-H "If-None-Match: $ETAG")
@@ -110,7 +110,7 @@ print(' '.join(str(n) for n in nums))
     # Skip wake on the very first poll (no prior state). Once a state file exists,
     # diff even when OLD_IDS is empty so empty→non-empty transitions wake the agent.
     if [ "$HAD_STATE_FILE" -eq 1 ]; then
-        if comm -13 <(echo "$OLD_IDS" | tr ' ' '\n' | sort -n) <(echo "$NEW_IDS" | tr ' ' '\n' | sort -n) | grep -q .; then
+        if comm -13 <(echo "$OLD_IDS" | tr ' ' '\n' | LC_ALL=C sort) <(echo "$NEW_IDS" | tr ' ' '\n' | LC_ALL=C sort) | grep -q .; then
             maybe_wake
         fi
     fi

@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -58,19 +60,19 @@ func TestSecretPatternRegex_MatchesKnownCredentials(t *testing.T) {
 		name  string
 		input string
 	}{
-		{"github classic PAT", "ghp_1234567890abcdefghijklmnopqrstuvwxyz"},                                  // clem:allow-secret
-		{"github OAuth token", "gho_1234567890abcdefghijklmnopqrstuvwxyz"},                                  // clem:allow-secret
-		{"github App server", "ghs_1234567890abcdefghijklmnopqrstuvwxyz"},                                   // clem:allow-secret
-		{"github fine-grained PAT", "github_pat_11ABCDEFG0abcdefghijkl_" + strings.Repeat("a", 60)},         // clem:allow-secret
-		{"anthropic API key", "sk-ant-abcdefghijklmnopqrstuvwxyz12345"},                                     // clem:allow-secret
-		{"openai API key", "sk-proj-abcdefghijklmnopqrstuvwxyz1234567890"},                                  // clem:allow-secret
-		{"slack bot token", "xoxb-1234567890-0987654321-abcdefghij"},                                        // clem:allow-secret
-		{"slack user token", "xoxp-1234567890-abcdefghij-klmnopqrst"},                                       // clem:allow-secret
-		{"aws access key", "AKIAIOSFODNN7EXAMPLE"},                                                          // clem:allow-secret
-		{"age secret key", "AGE-SECRET-KEY-1ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEFGHIJKLMNO"},           // clem:allow-secret
-		{"openssh private key", "-----BEGIN OPENSSH PRIVATE KEY-----"},                                      // clem:allow-secret
-		{"rsa private key", "-----BEGIN RSA PRIVATE KEY-----"},                                              // clem:allow-secret
-		{"generic private key", "-----BEGIN PRIVATE KEY-----"},                                              // clem:allow-secret
+		{"github classic PAT", "ghp_1234567890abcdefghijklmnopqrstuvwxyz"},                          // clem:allow-secret
+		{"github OAuth token", "gho_1234567890abcdefghijklmnopqrstuvwxyz"},                          // clem:allow-secret
+		{"github App server", "ghs_1234567890abcdefghijklmnopqrstuvwxyz"},                           // clem:allow-secret
+		{"github fine-grained PAT", "github_pat_11ABCDEFG0abcdefghijkl_" + strings.Repeat("a", 60)}, // clem:allow-secret
+		{"anthropic API key", "sk-ant-abcdefghijklmnopqrstuvwxyz12345"},                             // clem:allow-secret
+		{"openai API key", "sk-proj-abcdefghijklmnopqrstuvwxyz1234567890"},                          // clem:allow-secret
+		{"slack bot token", "xoxb-1234567890-0987654321-abcdefghij"},                                // clem:allow-secret
+		{"slack user token", "xoxp-1234567890-abcdefghij-klmnopqrst"},                               // clem:allow-secret
+		{"aws access key", "AKIAIOSFODNN7EXAMPLE"},                                                  // clem:allow-secret
+		{"age secret key", "AGE-SECRET-KEY-1ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEFGHIJKLMNO"},   // clem:allow-secret
+		{"openssh private key", "-----BEGIN OPENSSH PRIVATE KEY-----"},                              // clem:allow-secret
+		{"rsa private key", "-----BEGIN RSA PRIVATE KEY-----"},                                      // clem:allow-secret
+		{"generic private key", "-----BEGIN PRIVATE KEY-----"},                                      // clem:allow-secret
 	}
 	for _, tc := range positives {
 		if !re.MatchString(tc.input) {
@@ -123,8 +125,14 @@ func TestPrePushHookContent_IsExecutableBash(t *testing.T) {
 	if !strings.Contains(prePushHookContent, SecretPatternRegex) {
 		t.Error("pre-push hook should embed the exact SecretPatternRegex so bash and Go agree on behaviour")
 	}
-	if !strings.Contains(prePushHookContent, UnicodeTrapRegex) {
-		t.Error("pre-push hook should embed UnicodeTrapRegex (Pass 3, red-team A3)")
+	if !strings.Contains(prePushHookContent, UnicodeTrapBytesPattern) {
+		t.Error("pre-push hook should embed UnicodeTrapBytesPattern (Pass 3, red-team A3)")
+	}
+	if !strings.Contains(prePushHookContent, "export LC_ALL=C") {
+		t.Error("pre-push hook should force LC_ALL=C so matching is locale-independent (systemd sessions run under the C locale)")
+	}
+	if strings.Contains(prePushHookContent, "grep -P") {
+		t.Error("pre-push hook must not use grep -P: \\x{} code points above 0xFF silently fail under LANG=C")
 	}
 	if !strings.Contains(prePushHookContent, "base64 -d") {
 		t.Error("pre-push hook should include base64 decode pass (Pass 2, red-team A9)")
@@ -188,6 +196,72 @@ func TestUnicodeTrapRegex_DoesNotMatchPrintableText(t *testing.T) {
 	}
 }
 
+// trapBytesRe converts UnicodeTrapBytesPattern (bash printf octal escapes over
+// raw UTF-8 bytes) into a Go regexp operating on a latin-1-widened copy of the
+// subject — a faithful simulation of how LC_ALL=C grep -E sees bytes. This
+// keeps the byte pattern derived from the single shipped constant, not from a
+// hand-maintained copy.
+func trapBytesRe(t *testing.T) *regexp.Regexp {
+	t.Helper()
+	var sb strings.Builder
+	s := UnicodeTrapBytesPattern
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+3 < len(s) {
+			n, err := strconv.ParseUint(s[i+1:i+4], 8, 8)
+			if err != nil {
+				t.Fatalf("bad octal escape at %d in UnicodeTrapBytesPattern: %v", i, err)
+			}
+			fmt.Fprintf(&sb, `\x{%02X}`, n)
+			i += 3
+			continue
+		}
+		sb.WriteByte(s[i])
+	}
+	re, err := regexp.Compile(sb.String())
+	if err != nil {
+		t.Fatalf("UnicodeTrapBytesPattern does not translate to a valid regexp (%q): %v", sb.String(), err)
+	}
+	return re
+}
+
+// latin1Widen maps each UTF-8 byte of s to its own rune, so a byte-level
+// pattern can be evaluated with Go's rune-based regexp engine.
+func latin1Widen(s string) string {
+	b := []byte(s)
+	rs := make([]rune, len(b))
+	for i, bb := range b {
+		rs[i] = rune(bb)
+	}
+	return string(rs)
+}
+
+// TestUnicodeTrapBytesPattern_AgreesWithUnicodeTrapRegex sweeps the relevant
+// code-point neighbourhoods and asserts the byte-level pattern shipped in the
+// bash hook accepts and rejects exactly the same runes as the rune-level Go
+// reference. This is the sync contract between the two constants.
+func TestUnicodeTrapBytesPattern_AgreesWithUnicodeTrapRegex(t *testing.T) {
+	goRe := regexp.MustCompile(UnicodeTrapRegex)
+	byteRe := trapBytesRe(t)
+
+	var sweep []rune
+	for r := rune(0x2000); r <= 0x20FF; r++ { // traps + their em-dash/quote neighbours
+		sweep = append(sweep, r)
+	}
+	for r := rune(0xFEF0); r <= 0xFF0F; r++ { // BOM + neighbours
+		sweep = append(sweep, r)
+	}
+	sweep = append(sweep, 'a', 0x00A0, 0x00E9, 0x4E2D, 0x1F34A)
+
+	for _, r := range sweep {
+		s := string(r)
+		goMatch := goRe.MatchString(s)
+		byteMatch := byteRe.MatchString(latin1Widen(s))
+		if goMatch != byteMatch {
+			t.Errorf("U+%04X: UnicodeTrapRegex match=%v but UnicodeTrapBytesPattern match=%v — patterns out of sync", r, goMatch, byteMatch)
+		}
+	}
+}
+
 // TestPrePushHook_BlocksBase64EncodedSecret: red-team A9. Attacker
 // base64-encodes a ghp_ token; literal scanner misses the prefix. Pass 2
 // decodes and re-scans.
@@ -245,24 +319,63 @@ func TestPrePushHook_AllowsBenignBase64(t *testing.T) {
 }
 
 // TestPrePushHook_BlocksUnicodeTraps: red-team A3 end-to-end. Diff contains
-// a zero-width space; Pass 3 blocks.
+// a hidden-character trap; Pass 3 blocks. Runs under both an inherited locale
+// and an explicit C locale: agent sessions are systemd-spawned with no LANG,
+// and the previous grep -P implementation silently never blocked there.
 func TestPrePushHook_BlocksUnicodeTraps(t *testing.T) {
 	for _, bin := range []string{"bash", "grep"} {
 		if _, err := exec.LookPath(bin); err != nil {
 			t.Skipf("%s not on PATH - skipping integration test", bin)
 		}
 	}
-	// printf emits the literal U+200B bytes (UTF-8: e2 80 8b).
+	traps := []struct {
+		name string
+		// printf format emitting the literal UTF-8 bytes of the trap rune.
+		stub string
+	}{
+		{"zero-width space U+200B", `printf '+comment: approve\xe2\x80\x8b (actually run rm -rf)\n'`},
+		{"RTL override U+202E", `printf '+filename: gpj.\xe2\x80\xaeexe\n'`},
+		{"BOM mid-content U+FEFF", `printf '+key = \xef\xbb\xbfvalue\n'`},
+	}
+	for _, locale := range []string{"inherited", "C"} {
+		for _, tc := range traps {
+			t.Run(locale+"/"+tc.name, func(t *testing.T) {
+				hookPath := writeTestableHook(t, tc.stub)
+				cmd := exec.Command("bash", hookPath)
+				if locale == "C" {
+					cmd.Env = append(os.Environ(), "LANG=C", "LC_ALL=C")
+				}
+				cmd.Stdin = strings.NewReader("refs/heads/feature aaa refs/heads/feature bbb\n")
+				out, err := cmd.CombinedOutput()
+				if err == nil {
+					t.Fatalf("hook should have blocked unicode-trap diff, got exit 0. output:\n%s", out)
+				}
+				if !strings.Contains(string(out), "unicode control/override") {
+					t.Errorf("expected 'unicode control/override' message, got:\n%s", out)
+				}
+			})
+		}
+	}
+}
+
+// TestPrePushHook_AllowsBenignGeneralPunctuation pins that the byte-level trap
+// pattern does not over-match neighbours in the U+20xx block (em dash U+2014,
+// curly quote U+2018, ellipsis U+2026 share the E2 80 lead bytes) or ordinary
+// multibyte text. Blocking every em dash would make the hook unusable.
+func TestPrePushHook_AllowsBenignGeneralPunctuation(t *testing.T) {
+	for _, bin := range []string{"bash", "grep"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s not on PATH - skipping integration test", bin)
+		}
+	}
 	hookPath := writeTestableHook(t,
-		`printf '+comment: approve\xe2\x80\x8b (actually run rm -rf)\n'`)
+		`printf '+prose: caf\xc3\xa9 \xe2\x80\x94 \xe2\x80\x98quoted\xe2\x80\x99 and more\xe2\x80\xa6\n'`)
 	cmd := exec.Command("bash", hookPath)
+	cmd.Env = append(os.Environ(), "LANG=C", "LC_ALL=C")
 	cmd.Stdin = strings.NewReader("refs/heads/feature aaa refs/heads/feature bbb\n")
 	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("hook should have blocked unicode-trap diff, got exit 0. output:\n%s", out)
-	}
-	if !strings.Contains(string(out), "unicode control/override") {
-		t.Errorf("expected 'unicode control/override' message, got:\n%s", out)
+	if err != nil {
+		t.Fatalf("hook should have allowed benign punctuation, got exit err %v. output:\n%s", err, out)
 	}
 }
 
@@ -388,14 +501,14 @@ func TestSecretCodePatternRegex_MatchesKnownPatterns(t *testing.T) {
 		name  string
 		input string
 	}{
-		{"go GH_TOKEN", `token := os.Getenv("GH_TOKEN")`},                  // clem:allow-secret
-		{"go DISCORD_TOKEN", `d := os.Getenv("DISCORD_TOKEN")`},            // clem:allow-secret
-		{"go ANTHROPIC_API_KEY", `k := os.Getenv("ANTHROPIC_API_KEY")`},    // clem:allow-secret
+		{"go GH_TOKEN", `token := os.Getenv("GH_TOKEN")`},                       // clem:allow-secret
+		{"go DISCORD_TOKEN", `d := os.Getenv("DISCORD_TOKEN")`},                 // clem:allow-secret
+		{"go ANTHROPIC_API_KEY", `k := os.Getenv("ANTHROPIC_API_KEY")`},         // clem:allow-secret
 		{"go AWS_SECRET_ACCESS_KEY", `s := os.Getenv("AWS_SECRET_ACCESS_KEY")`}, // clem:allow-secret
 		{"go SLACK_MCP_XOXP_TOKEN", `t := os.Getenv("SLACK_MCP_XOXP_TOKEN")`},   // clem:allow-secret
-		{"python double-quote GH_TOKEN", `tok = os.environ["GH_TOKEN"]`},   // clem:allow-secret
-		{"node GH_TOKEN", `const t = process.env.GH_TOKEN`},                // clem:allow-secret
-		{"node ANTHROPIC_API_KEY", `const k = process.env.ANTHROPIC_API_KEY`}, // clem:allow-secret
+		{"python double-quote GH_TOKEN", `tok = os.environ["GH_TOKEN"]`},        // clem:allow-secret
+		{"node GH_TOKEN", `const t = process.env.GH_TOKEN`},                     // clem:allow-secret
+		{"node ANTHROPIC_API_KEY", `const k = process.env.ANTHROPIC_API_KEY`},   // clem:allow-secret
 	}
 	for _, tc := range positives {
 		if !re.MatchString(tc.input) {
@@ -1090,7 +1203,7 @@ func TestWriteHostManagedSettings_WritesDenyList(t *testing.T) {
 	cfg := &config.Config{
 		Project: "test",
 		Agents: map[string]config.AgentConfig{
-			"lead": {Permissions: config.PermissionsConfig{Deny: []string{"Bash(curl:*)", "Bash(wget:*)"}}},
+			"lead":   {Permissions: config.PermissionsConfig{Deny: []string{"Bash(curl:*)", "Bash(wget:*)"}}},
 			"worker": {Permissions: config.PermissionsConfig{Deny: []string{"Bash(rm:*)", "Bash(curl:*)"}}},
 		},
 	}
@@ -1154,6 +1267,293 @@ func TestWriteHostManagedSettings_EmptyDenyWhenNoPermissions(t *testing.T) {
 	deny := perms["deny"].([]any)
 	if len(deny) != 0 {
 		t.Errorf("expected empty deny list, got: %v", deny)
+	}
+}
+
+// skillsStub interprets ln -sfn / rm -f / mkdir -p so SyncSkillsRepo's
+// filesystem-mutating side effects land on the real test temp dir. Calls are
+// still recorded for assertions on what was invoked.
+type skillsStub struct {
+	stubExec
+	cloneSeed func(cache string) // called when `git clone` is invoked
+}
+
+func (s *skillsStub) Run(name string, args ...string) ([]byte, error) {
+	s.calls = append(s.calls, append([]string{name}, args...))
+	// Two forms supported:
+	//   sudo -iu <user> <cmd> <cmdArgs...>    (provision path)
+	//   <cmd> <cmdArgs...>                    (runner/self path)
+	var cmd string
+	var cargs []string
+	switch {
+	case name == "sudo" && len(args) >= 4 && args[0] == "-iu":
+		cmd = args[2]
+		cargs = args[3:]
+	default:
+		cmd = name
+		cargs = args
+	}
+	switch cmd {
+	case "ln":
+		if len(cargs) >= 3 && cargs[0] == "-sfn" {
+			_ = os.Remove(cargs[2])
+			if err := os.Symlink(cargs[1], cargs[2]); err != nil {
+				return nil, err
+			}
+		}
+	case "rm":
+		if len(cargs) >= 2 && cargs[0] == "-f" {
+			_ = os.Remove(cargs[1])
+		}
+	case "git":
+		if len(cargs) >= 1 && cargs[0] == "clone" && s.cloneSeed != nil {
+			if len(cargs) >= 3 {
+				s.cloneSeed(cargs[2])
+			}
+		}
+		// git -C <dir> pull --ff-only — no-op
+	}
+	return nil, nil
+}
+
+func withSkillsStub(t *testing.T) *skillsStub {
+	t.Helper()
+	stub := &skillsStub{}
+	orig := sys
+	sys = stub
+	t.Cleanup(func() { sys = orig })
+	return stub
+}
+
+func TestSkillsCacheName(t *testing.T) {
+	cases := map[string]string{
+		"https://github.com/foo/bar":            "bar",
+		"https://github.com/foo/bar.git":        "bar",
+		"https://github.com/foo/bar/":           "bar",
+		"git@github.com:foo/bar.git":            "bar",
+		"ssh://git@self-hosted/foo/bar.git":     "bar",
+		"https://gitlab.example.com/g/sub/repo": "repo",
+	}
+	for in, want := range cases {
+		if got := skillsCacheName(in); got != want {
+			t.Errorf("skillsCacheName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestSyncSkillsRepo_SymlinksSharedAndAgent verifies the happy path: a
+// pre-existing cache with shared/ and worker/ subdirs produces symlinks in
+// the agent's skills dir for each, and ignores top-level dirs outside that set.
+func TestSyncSkillsRepo_SymlinksSharedAndAgent(t *testing.T) {
+	stub := withSkillsStub(t)
+	home := t.TempDir()
+	repoURL := "https://example.com/owner/team-skills.git"
+	cache := filepath.Join(home, ".cache", "team-skills")
+
+	// Seed cache as if `git clone` had already run.
+	for _, p := range []string{
+		filepath.Join(cache, "shared", "skill-a", "SKILL.md"),
+		filepath.Join(cache, "worker", "skill-b", "SKILL.md"),
+		filepath.Join(cache, "lead", "skill-c", "SKILL.md"),       // not for worker
+		filepath.Join(cache, "random-dir", "skill-d", "SKILL.md"), // ignored
+	} {
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatalf("seed mkdir: %v", err)
+		}
+		if err := os.WriteFile(p, []byte("---\nname: x\n---\n"), 0644); err != nil {
+			t.Fatalf("seed write: %v", err)
+		}
+	}
+
+	if err := SyncSkillsRepo("testuser", home, "worker", repoURL); err != nil {
+		t.Fatalf("SyncSkillsRepo: %v", err)
+	}
+
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	for _, name := range []string{"skill-a", "skill-b"} {
+		link := filepath.Join(skillsDir, name)
+		target, err := os.Readlink(link)
+		if err != nil {
+			t.Errorf("%s: expected symlink, got: %v", name, err)
+			continue
+		}
+		if !strings.HasPrefix(target, cache+string(filepath.Separator)) {
+			t.Errorf("%s: symlink target %q not under cache %q", name, target, cache)
+		}
+	}
+	// skill-c (lead) and skill-d (random-dir) must NOT appear for worker
+	for _, name := range []string{"skill-c", "skill-d"} {
+		if _, err := os.Lstat(filepath.Join(skillsDir, name)); err == nil {
+			t.Errorf("worker should not see %s", name)
+		}
+	}
+
+	// First call should have invoked `git clone` (cache didn't exist before
+	// the test seeded it... wait, we seeded it. So `git -C cache pull --ff-only`
+	// is what should have fired).
+	sawPull := false
+	for _, c := range stub.calls {
+		if len(c) >= 5 && c[0] == "sudo" && c[3] == "git" && c[4] == "-C" {
+			sawPull = true
+		}
+	}
+	if !sawPull {
+		t.Errorf("expected git pull to fire on existing cache; calls: %v", stub.calls)
+	}
+}
+
+// TestSyncSkillsRepo_PrunesStaleSymlinks verifies that a symlink in the
+// skills dir pointing into the cache for a skill that no longer exists in
+// the repo is removed on next sync. Real dirs and external-target symlinks
+// are left alone.
+func TestSyncSkillsRepo_PrunesStaleSymlinks(t *testing.T) {
+	withSkillsStub(t)
+	home := t.TempDir()
+	repoURL := "https://example.com/owner/team-skills.git"
+	cache := filepath.Join(home, ".cache", "team-skills")
+	skillsDir := filepath.Join(home, ".claude", "skills")
+
+	// Cache has only one skill in shared.
+	if err := os.MkdirAll(filepath.Join(cache, "shared", "kept-skill"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-existing stale symlink pointing into cache for a now-removed skill.
+	staleTarget := filepath.Join(cache, "shared", "removed-skill")
+	if err := os.Symlink(staleTarget, filepath.Join(skillsDir, "removed-skill")); err != nil {
+		t.Fatal(err)
+	}
+	// Operator-installed real skill dir (e.g. from InstallSkill). Must survive.
+	if err := os.MkdirAll(filepath.Join(skillsDir, "operator-skill"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Symlink pointing OUTSIDE the cache. Must survive.
+	external := filepath.Join(home, "external-skill")
+	if err := os.MkdirAll(external, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, filepath.Join(skillsDir, "external-skill")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SyncSkillsRepo("testuser", home, "worker", repoURL); err != nil {
+		t.Fatalf("SyncSkillsRepo: %v", err)
+	}
+
+	if _, err := os.Lstat(filepath.Join(skillsDir, "removed-skill")); err == nil {
+		t.Error("stale symlink to cache should have been pruned")
+	}
+	if _, err := os.Lstat(filepath.Join(skillsDir, "operator-skill")); err != nil {
+		t.Errorf("operator-installed real dir should survive: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(skillsDir, "external-skill")); err != nil {
+		t.Errorf("symlink outside cache should survive: %v", err)
+	}
+	if _, err := os.Readlink(filepath.Join(skillsDir, "kept-skill")); err != nil {
+		t.Errorf("kept-skill symlink should be created: %v", err)
+	}
+}
+
+// TestSyncSkillsRepo_RejectsInvalidNames verifies that skill subdirs whose
+// names fail the extension-name regex (e.g. shell-special characters) are
+// skipped rather than symlinked, even if the operator-controlled repo
+// somehow contained them.
+func TestSyncSkillsRepo_RejectsInvalidNames(t *testing.T) {
+	withSkillsStub(t)
+	home := t.TempDir()
+	repoURL := "https://example.com/owner/team-skills.git"
+	cache := filepath.Join(home, ".cache", "team-skills")
+
+	if err := os.MkdirAll(filepath.Join(cache, "shared", "good-skill"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Names that should be rejected by the regex
+	for _, bad := range []string{"-leading-dash", "has space", "has;semi"} {
+		if err := os.MkdirAll(filepath.Join(cache, "shared", bad), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := SyncSkillsRepo("testuser", home, "worker", repoURL); err != nil {
+		t.Fatalf("SyncSkillsRepo: %v", err)
+	}
+
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	if _, err := os.Readlink(filepath.Join(skillsDir, "good-skill")); err != nil {
+		t.Errorf("good-skill should be symlinked: %v", err)
+	}
+	for _, bad := range []string{"-leading-dash", "has space", "has;semi"} {
+		if _, err := os.Lstat(filepath.Join(skillsDir, bad)); err == nil {
+			t.Errorf("invalid name %q should have been skipped", bad)
+		}
+	}
+}
+
+// TestSyncSkillsRepo_ClonesWhenCacheMissing verifies that a missing cache dir
+// triggers `git clone` rather than `git pull`. The stub's cloneSeed creates
+// the dir so the rest of the function can read it.
+// TestSyncSkillsRepoAsSelf_NoSudoWrap verifies the runtime variant invokes
+// git/ln/rm directly (no `sudo -iu` wrapping), since the runner already
+// executes as the agent user.
+func TestSyncSkillsRepoAsSelf_NoSudoWrap(t *testing.T) {
+	stub := withSkillsStub(t)
+	home := t.TempDir()
+	cache := filepath.Join(home, ".cache", "team-skills")
+	if err := os.MkdirAll(filepath.Join(cache, "shared", "live-skill"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SyncSkillsRepoAsSelf(home, "worker", "https://example.com/owner/team-skills.git"); err != nil {
+		t.Fatalf("SyncSkillsRepoAsSelf: %v", err)
+	}
+
+	for _, c := range stub.calls {
+		if len(c) >= 2 && c[0] == "sudo" {
+			t.Errorf("AsSelf path must not call sudo; got %v", c)
+		}
+	}
+	if _, err := os.Readlink(filepath.Join(home, ".claude", "skills", "live-skill")); err != nil {
+		t.Errorf("AsSelf should symlink live-skill: %v", err)
+	}
+}
+
+func TestSyncSkillsRepo_ClonesWhenCacheMissing(t *testing.T) {
+	stub := withSkillsStub(t)
+	home := t.TempDir()
+	repoURL := "git@gitlab.example.com:owner/team-skills.git"
+	cache := filepath.Join(home, ".cache", "team-skills")
+
+	stub.cloneSeed = func(c string) {
+		if c != cache {
+			t.Errorf("clone target %q, want %q", c, cache)
+		}
+		if err := os.MkdirAll(filepath.Join(c, "shared", "first-skill"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := SyncSkillsRepo("testuser", home, "worker", repoURL); err != nil {
+		t.Fatalf("SyncSkillsRepo: %v", err)
+	}
+
+	sawClone := false
+	for _, c := range stub.calls {
+		if len(c) >= 5 && c[0] == "sudo" && c[3] == "git" && c[4] == "clone" {
+			sawClone = true
+			if c[5] != repoURL {
+				t.Errorf("clone URL = %q, want %q", c[5], repoURL)
+			}
+		}
+	}
+	if !sawClone {
+		t.Errorf("expected git clone on missing cache; calls: %v", stub.calls)
+	}
+
+	if _, err := os.Readlink(filepath.Join(home, ".claude", "skills", "first-skill")); err != nil {
+		t.Errorf("first-skill should be symlinked after clone: %v", err)
 	}
 }
 

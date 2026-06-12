@@ -1,6 +1,9 @@
 package coordination
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Backend describes a coordination platform clem can use for agent task boards.
 // Three are supported today: Discord (default), Slack, and GitHub. Anything
@@ -35,6 +38,19 @@ func RenderAlert(b Backend, p AlertParams) string {
 	default:
 		return fmt.Sprintf(b.AlertTemplate, p.Channel, p.Message)
 	}
+}
+
+// AlertCurlGuard wraps an alert curl body with token (and GitHub issue) guards.
+// Skips the curl when backend is github and channels.alerts is unset.
+func AlertCurlGuard(b Backend, channel, body string) string {
+	if b.Name == "github" && strings.TrimSpace(channel) == "" {
+		return "true"
+	}
+	guard := fmt.Sprintf(`[ -n "$%s" ]`, b.TokenEnvVar)
+	if b.Name == "github" {
+		guard += fmt.Sprintf(` && [ -n "%s" ]`, strings.TrimSpace(channel))
+	}
+	return guard + ` && ` + body
 }
 
 // Known returns the backend for a config value. Unknown backends return an
@@ -82,10 +98,10 @@ Slack has no forum channel type — threads replace first-class forum posts.`,
 
 var github = Backend{
 	Name:        "github",
-	TokenEnvVar: "GITHUB_TOKEN",
+	TokenEnvVar: "GH_TOKEN",
 	// Repo and issue number come from coordination.github_repo and channels.alerts.
 	AlertTemplate: `curl -s -X POST "https://api.github.com/repos/%s/issues/%s/comments" \
-        -H "Authorization: Bearer $GITHUB_TOKEN" -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" \
         -H "Accept: application/vnd.github+json" \
         -d "{\"body\":\"%s\"}" > /dev/null 2>&1`,
 	TaskBoardNotes: `Task board lives in GitHub Issues on the configured repo (github_repo).
