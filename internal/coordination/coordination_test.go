@@ -15,6 +15,7 @@ func TestKnown_Backends(t *testing.T) {
 		{"discord", "discord", false},
 		{"slack", "slack", false},
 		{"github", "github", false},
+		{"jira", "jira", false},
 		{"gitlab", "", true},
 	}
 	for _, tc := range tests {
@@ -96,6 +97,46 @@ func TestAlertCurlGuard_GitHubRequiresTokenAndIssue(t *testing.T) {
 	for _, want := range []string{`[ -n "$GH_TOKEN" ]`, `[ -n "42" ]`, `curl example`} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("AlertCurlGuard missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRenderAlert_Jira(t *testing.T) {
+	b, _ := Known("jira")
+	got := RenderAlert(b, AlertParams{
+		Repo:    "acme.atlassian.net",
+		Channel: "OPS-12",
+		Message: "alert body",
+	})
+	for _, want := range []string{
+		`https://acme.atlassian.net/rest/api/3/issue/OPS-12/comment`,
+		`JIRA_USERNAME:$JIRA_API_TOKEN`,
+		`alert body`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("RenderAlert jira missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestAlertCurlGuard_JiraSkipsWhenAlertsUnset(t *testing.T) {
+	b, _ := Known("jira")
+	got := AlertCurlGuard(b, "", `curl example`)
+	if got != "true" {
+		t.Fatalf("expected no-op when alerts unset, got %q", got)
+	}
+}
+
+func TestAlertCurlGuard_JiraRequiresTokenUserAndIssue(t *testing.T) {
+	b, _ := Known("jira")
+	got := AlertCurlGuard(b, "OPS-1", `curl example`)
+	for _, want := range []string{
+		`[ -n "$JIRA_API_TOKEN" ]`,
+		`[ -n "$JIRA_USERNAME" ]`,
+		`[ -n "OPS-1" ]`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("AlertCurlGuard jira missing %q:\n%s", want, got)
 		}
 	}
 }

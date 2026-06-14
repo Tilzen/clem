@@ -1,0 +1,43 @@
+# Sample clem.yaml — Jira Software as coordination backend.
+# Agents discover tasks via jira-mcp (mcp-atlassian) + JQL polling sidecar.
+#
+# Prerequisites:
+#   - Jira Cloud site with project ENG (or edit below)
+#   - Labels: clem-todo, clem-in-progress, clem-done, clem-blocked
+#   - Meta-issues for alerts and lessons (issue keys below)
+#   - pipx install mcp-atlassian
+#   - JIRA_USERNAME + JIRA_API_TOKEN in each agent vault
+
+project: sample
+
+coordination:
+  backend: jira
+  jira:
+    site: "${JIRA_SITE:-your-org.atlassian.net}"
+    project: "${JIRA_PROJECT:-ENG}"
+    jql_extra: "AND sprint in openSprints()"
+  channels:
+    tasks:   "clem-todo"
+    alerts:  "${JIRA_ALERTS_ISSUE:-OPS-12}"
+    lessons: "${JIRA_LESSONS_ISSUE:-OPS-34}"
+
+operator:
+  github_logins: ["your-github-login"]
+  jira_accounts: ["you@company.com"]
+
+agents:
+  lead:
+    name: "Clementine"
+    role: "Lead Software Engineer"
+    runtime: claude-code
+    model: "claude-sonnet-4-6"
+    iteration: 5m
+    web_terminal_port: 7681
+    web_terminal_bind: 0.0.0.0
+    vaults: [github, jira]
+    prompt: >-
+      Act as {{agent.name}} per CLAUDE.local.md.
+      Each iteration: jira_search for project {{coordination.jira.project}} with label
+      {{channels.tasks}} and no assignee. Claim one via the race-safe protocol in
+      CLAUDE.shared.md, or continue in-progress work assigned to you.
+      Run bash: kill $PPID when all tiers are empty.

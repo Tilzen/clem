@@ -99,6 +99,17 @@ if _backend != 'github' and os.environ.get('SLACK_MCP_XOXP_TOKEN'):
             'SLACK_MCP_ADD_MESSAGE_TOOL': os.environ.get('SLACK_MCP_ADD_MESSAGE_TOOL', 'true'),
         },
     }
+# Jira (mcp-atlassian). Used when coordination backend is jira; agents discover
+# and update work via jira_search / jira_update_issue instead of chat MCPs.
+if _backend == 'jira' and os.environ.get('JIRA_API_TOKEN') and os.environ.get('JIRA_USERNAME'):
+    cfg['mcpServers']['jira-mcp'] = {
+        'command': _mcp_bin('mcp-atlassian'),
+        'env': {
+            'JIRA_URL': 'https://{{.JiraSite}}',
+            'JIRA_USERNAME': os.environ['JIRA_USERNAME'],
+            'JIRA_API_TOKEN': os.environ['JIRA_API_TOKEN'],
+        },
+    }
 # The Prefect MCP (SSH_HOST/SSH_KEY/ES_PASSWORD) was removed: SSH-based MCPs
 # cannot be brokered by agent-vault (SSH is not HTTP) and are dropped under the
 # credential-proxy model. Re-add it in a project .mcp.json if a host still needs
@@ -299,6 +310,17 @@ if _backend != 'github' and os.environ.get('SLACK_MCP_XOXP_TOKEN'):
             'SLACK_MCP_ADD_MESSAGE_TOOL': os.environ.get('SLACK_MCP_ADD_MESSAGE_TOOL', 'true'),
         },
     }
+if _backend == 'jira' and os.environ.get('JIRA_API_TOKEN') and os.environ.get('JIRA_USERNAME'):
+    cfg['mcp']['jira-mcp'] = {
+        'type': 'local',
+        'command': [_mcp_bin('mcp-atlassian')],
+        'enabled': True,
+        'environment': {
+            'JIRA_URL': 'https://{{.JiraSite}}',
+            'JIRA_USERNAME': os.environ['JIRA_USERNAME'],
+            'JIRA_API_TOKEN': os.environ['JIRA_API_TOKEN'],
+        },
+    }
 print(json.dumps(cfg, indent=2))
 " > "$WORKDIR/opencode.json"
 
@@ -365,7 +387,7 @@ After=network.target
 # start, so without a Wants here a "systemctl start" of the agent leaves the
 # terminal dead until provision re-enables it.
 Wants=clem-ttyd-{{.Project}}-{{.AgentKey}}.service
-{{.GitHubWatchUnitDeps}}
+{{.CoordinationWatchUnitDeps}}
 {{.ProxyUnitDeps}}
 [Service]
 Type=forking
@@ -449,11 +471,13 @@ type RunnerParams struct {
 	// SidecarServers is a Python/JSON list literal of [toolName, port] pairs for
 	// the privileged MCP sidecars this agent subscribes to. "[]" when none.
 	SidecarServers string
-	// CoordinationBackend is the coordination.backend value (discord, slack, github).
+	// CoordinationBackend is the coordination.backend value (discord, slack, github, jira).
 	CoordinationBackend string
-	// GitHubWatchUnitDeps is the Wants= block tying the agent to the GitHub
-	// issue watcher sidecar when coordination.backend is github.
-	GitHubWatchUnitDeps string
+	// JiraSite is the Atlassian Cloud hostname when coordination.backend is jira.
+	JiraSite string
+	// CoordinationWatchUnitDeps is the Wants= block tying the agent to a
+	// coordination watcher sidecar (GitHub or Jira issue poll).
+	CoordinationWatchUnitDeps string
 	// SkillsSyncCmd is the shell snippet invoked at the top of every iteration
 	// to refresh the agent's ~/.claude/skills/ symlinks from the team skills
 	// repo. Empty when cfg.SkillsRepo is unset, in which case no sync runs.
@@ -505,9 +529,13 @@ func Generate(cfg *config.Config, agentKey string) string {
 
 	alertChannel := cfg.Coordination.Channels["alerts"]
 	backend, _ := coordination.Known(cfg.Coordination.Backend) // validated at load time
+	alertRepo := cfg.Coordination.GithubRepo
+	if cfg.UsesJiraCoordination() {
+		alertRepo = cfg.Coordination.Jira.Site
+	}
 	alertMsg := fmt.Sprintf(`⚠️ %s: CLAUDE.local.md is ${SIZE} bytes (>${MAX_CLAUDE_MD_BYTES}). Trim it to reduce token waste.`, escapeForAlert(ac.Name))
 	alertCurlBody := coordination.RenderAlert(backend, coordination.AlertParams{
-		Repo:    cfg.Coordination.GithubRepo,
+		Repo:    alertRepo,
 		Channel: alertChannel,
 		Message: alertMsg,
 	})
@@ -551,9 +579,10 @@ func Generate(cfg *config.Config, agentKey string) string {
 		SleepNight:          nightSec,
 		AlertChannel:        alertChannel,
 		AlertCurl:           alertCurl,
-		WatchChannelIDs:     watchChannelIDs(cfg),
-		CoordinationBackend: cfg.Coordination.BackendOrDefault(),
-		GitHubWatchUnitDeps: githubWatchUnitDeps(cfg, agentKey),
+		WatchChannelIDs:           watchChannelIDs(cfg),
+		CoordinationBackend:       cfg.Coordination.BackendOrDefault(),
+		JiraSite:                  cfg.Coordination.Jira.Site,
+		CoordinationWatchUnitDeps: coordinationWatchUnitDeps(cfg, agentKey),
 		ProxyExport:         proxyExportBlock(cfg, agentKey),
 		SidecarServers:      sidecarServersLiteral(cfg, agentKey),
 		SkillsSyncCmd:       skillsSyncCmd,
@@ -666,7 +695,7 @@ func GenerateService(cfg *config.Config, agentKey string) (string, error) {
 		HardeningDirectives: buildHardeningDirectives(homeDir, cfg.Project),
 		ResourceDirectives:  ac.ResourceLimits.Directives(),
 		ProxyUnitDeps:       proxyDeps,
-		GitHubWatchUnitDeps: githubWatchUnitDeps(cfg, agentKey),
+		CoordinationWatchUnitDeps: coordinationWatchUnitDeps(cfg, agentKey),
 	}
 	return renderTemplate(serviceTemplate, p), nil
 }
@@ -715,7 +744,8 @@ func renderTemplate(tmpl string, p RunnerParams) string {
 		"{{.ProxyUnitDeps}}", p.ProxyUnitDeps,
 		"{{.SidecarServers}}", p.SidecarServers,
 		"{{.CoordinationBackend}}", p.CoordinationBackend,
-		"{{.GitHubWatchUnitDeps}}", p.GitHubWatchUnitDeps,
+		"{{.CoordinationWatchUnitDeps}}", p.CoordinationWatchUnitDeps,
+		"{{.JiraSite}}", p.JiraSite,
 		"{{.SkillsSyncCmd}}", p.SkillsSyncCmd,
 	)
 	return r.Replace(tmpl)
@@ -772,9 +802,15 @@ func sortedChannelIDs(channels map[string]string) string {
 	return strings.Join(ids, ",")
 }
 
-func githubWatchUnitDeps(cfg *config.Config, agentKey string) string {
-	if cfg == nil || !cfg.UsesGitHubCoordination() {
+func coordinationWatchUnitDeps(cfg *config.Config, agentKey string) string {
+	if cfg == nil {
 		return ""
 	}
-	return fmt.Sprintf("Wants=%s\n", cfg.GitHubWatchServiceName(agentKey))
+	if cfg.UsesGitHubCoordination() {
+		return fmt.Sprintf("Wants=%s\n", cfg.GitHubWatchServiceName(agentKey))
+	}
+	if cfg.UsesJiraCoordination() {
+		return fmt.Sprintf("Wants=%s\n", cfg.JiraWatchServiceName(agentKey))
+	}
+	return ""
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/jahwag/clem/internal/agentdoc"
 	"github.com/jahwag/clem/internal/config"
 	"github.com/jahwag/clem/internal/githubwatch"
+	"github.com/jahwag/clem/internal/jirawatch"
 	"github.com/jahwag/clem/internal/proxy"
 	"github.com/jahwag/clem/internal/remote"
 	"github.com/jahwag/clem/internal/runner"
@@ -237,6 +238,23 @@ func provisionAgent(agentKey string, ac config.AgentConfig) error {
 		watchSvcName := cfg.GitHubWatchServiceName(agentKey)
 		if err := agent.InstallServiceByName(watchSvcName, watchSvc); err != nil {
 			return fmt.Errorf("installing github watch service for %s: %w", agentKey, err)
+		}
+		fmt.Printf("  installed %s\n", watchSvcName)
+	}
+
+	if cfg.UsesJiraCoordination() {
+		watchContent := jirawatch.GenerateScript(cfg, agentKey)
+		watchPath := filepath.Join(binDir, "clem-jira-watch.sh")
+		if err := os.WriteFile(watchPath, []byte(watchContent), 0755); err != nil {
+			return fmt.Errorf("writing jira watch script for %s: %w", agentKey, err)
+		}
+		chownDir(watchPath, osUser)
+		fmt.Printf("  wrote %s\n", watchPath)
+
+		watchSvc := jirawatch.GenerateService(cfg, agentKey)
+		watchSvcName := cfg.JiraWatchServiceName(agentKey)
+		if err := agent.InstallServiceByName(watchSvcName, watchSvc); err != nil {
+			return fmt.Errorf("installing jira watch service for %s: %w", agentKey, err)
 		}
 		fmt.Printf("  installed %s\n", watchSvcName)
 	}

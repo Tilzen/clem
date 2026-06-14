@@ -43,6 +43,17 @@ func (c *Config) UsesGitHubCoordination() bool {
 	return c.Coordination.BackendOrDefault() == "github"
 }
 
+// JiraWatchServiceName returns the systemd service name for the Jira issue
+// watcher sidecar that wakes the agent's tmux session on new tasks.
+func (c *Config) JiraWatchServiceName(agentKey string) string {
+	return fmt.Sprintf("clem-jira-watch-%s-%s.service", c.Project, agentKey)
+}
+
+// UsesJiraCoordination reports whether coordination uses Jira Software.
+func (c *Config) UsesJiraCoordination() bool {
+	return c.Coordination.BackendOrDefault() == "jira"
+}
+
 // PipelockServiceName returns the systemd service name for the egress proxy.
 func (c *Config) PipelockServiceName() string {
 	return fmt.Sprintf("clem-pipelock-%s.service", c.Project)

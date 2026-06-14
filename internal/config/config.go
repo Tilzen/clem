@@ -88,18 +88,36 @@ var issueNumberRe = regexp.MustCompile(`^[1-9][0-9]*$`)
 // into generated bash). Rejects shell metacharacters; max 50 chars per GitHub.
 var githubLabelRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9:_-]{0,49}$`)
 
+// jiraSiteRe matches a Jira Cloud site hostname (no scheme).
+var jiraSiteRe = regexp.MustCompile(`^[a-z][a-z0-9-]*\.atlassian\.net$`)
+
+// jiraProjectKeyRe matches a Jira project key (e.g. ENG, OPS).
+var jiraProjectKeyRe = regexp.MustCompile(`^[A-Z][A-Z0-9]{0,9}$`)
+
+// jiraIssueKeyRe matches a Jira issue key used in channels.alerts/lessons.
+var jiraIssueKeyRe = regexp.MustCompile(`^[A-Z][A-Z0-9]+-[1-9][0-9]*$`)
+
+// jiraJQLOverrideRe matches an optional extra JQL fragment appended to the
+// task-board query in the jira watcher (e.g. AND sprint in openSprints()).
+var jiraJQLOverrideRe = regexp.MustCompile(`^[a-zA-Z0-9 "'().,:_-]{0,200}$`)
+
+// jiraAccountRe matches an Atlassian account email for operator trust lists.
+var jiraAccountRe = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+
 // OperatorConfig identifies the humans who are trusted to issue instructions
-// to agents via Discord or GitHub. Provisioned agents use these IDs in the
-// generated prompt so no operator ID is hardcoded in clem source.
+// to agents via Discord, GitHub, or Jira. Provisioned agents use these IDs in
+// the generated prompt so no operator ID is hardcoded in clem source.
 //
 // discord_ids must be 17–19-digit decimal Discord snowflakes.
 // github_logins must match ^[a-zA-Z0-9-]{1,39}$ (GitHub username rules).
+// jira_accounts must be valid email addresses (Atlassian account emails).
 //
-// The block is optional. When omitted, {{operator.discord_ids}} and
-// {{operator.github_logins}} in CLAUDE.shared.md render as empty strings.
+// The block is optional. When omitted, {{operator.*}} placeholders in
+// CLAUDE.shared.md render as empty strings.
 type OperatorConfig struct {
-	DiscordIDs   []string `yaml:"discord_ids"`
-	GitHubLogins []string `yaml:"github_logins"`
+	DiscordIDs    []string `yaml:"discord_ids"`
+	GitHubLogins  []string `yaml:"github_logins"`
+	JiraAccounts  []string `yaml:"jira_accounts"`
 }
 
 // CavemanLevel controls whether and at what intensity the caveman plugin is
@@ -183,11 +201,23 @@ type Config struct {
 
 type Coordination struct {
 	Backend string `yaml:"backend"`
-	// ServerID is the Discord guild or Slack workspace ID. Unused for GitHub.
+	// ServerID is the Discord guild or Slack workspace ID. Unused for GitHub/Jira.
 	ServerID string `yaml:"server_id"`
 	// GithubRepo is owner/name for the task-board repo when backend is github.
 	GithubRepo string            `yaml:"github_repo"`
+	Jira       JiraCoordination  `yaml:"jira"`
 	Channels   map[string]string `yaml:"channels"`
+}
+
+// JiraCoordination holds Jira-specific coordination settings when backend is jira.
+type JiraCoordination struct {
+	// Site is the Atlassian Cloud hostname (e.g. acme.atlassian.net), no scheme.
+	Site string `yaml:"site"`
+	// Project is the Jira project key (e.g. ENG).
+	Project string `yaml:"project"`
+	// JQLExtra is an optional fragment appended to the task-board JQL in the
+	// issue watcher, e.g. `AND sprint in openSprints()` for sprint-scoped work.
+	JQLExtra string `yaml:"jql_extra"`
 }
 
 func (c *Coordination) BackendOrDefault() string {
@@ -706,6 +736,34 @@ func (c *Coordination) validate() error {
 		if !githubLabelRe.MatchString(v) {
 			return fmt.Errorf("coordination.channels.tasks: %q is not a valid GitHub label (use letters, digits, :, _, - only)", v)
 		}
+	case "jira":
+		if c.Jira.Site == "" {
+			return fmt.Errorf("coordination.jira.site is required when backend is jira")
+		}
+		if !jiraSiteRe.MatchString(c.Jira.Site) {
+			return fmt.Errorf("coordination.jira.site: %q is not a valid Atlassian Cloud hostname (e.g. acme.atlassian.net)", c.Jira.Site)
+		}
+		if c.Jira.Project == "" {
+			return fmt.Errorf("coordination.jira.project is required when backend is jira")
+		}
+		if !jiraProjectKeyRe.MatchString(c.Jira.Project) {
+			return fmt.Errorf("coordination.jira.project: %q is not a valid Jira project key", c.Jira.Project)
+		}
+		if extra := strings.TrimSpace(c.Jira.JQLExtra); extra != "" && !jiraJQLOverrideRe.MatchString(extra) {
+			return fmt.Errorf("coordination.jira.jql_extra: %q contains unsupported characters", extra)
+		}
+		for _, key := range []string{"alerts", "lessons"} {
+			if v := strings.TrimSpace(c.Channels[key]); v != "" && !jiraIssueKeyRe.MatchString(v) {
+				return fmt.Errorf("coordination.channels.%s: %q must be a Jira issue key when backend is jira", key, v)
+			}
+		}
+		v := strings.TrimSpace(c.Channels["tasks"])
+		if v == "" {
+			return fmt.Errorf("coordination.channels.tasks is required when backend is jira (use a label such as clem-todo)")
+		}
+		if !githubLabelRe.MatchString(v) {
+			return fmt.Errorf("coordination.channels.tasks: %q is not a valid Jira label", v)
+		}
 	}
 	return nil
 }
@@ -720,6 +778,11 @@ func (op *OperatorConfig) validate() error {
 	for _, login := range op.GitHubLogins {
 		if !githubLoginRe.MatchString(login) {
 			return fmt.Errorf("operator.github_logins: %q is not a valid GitHub login (^[a-zA-Z0-9-]{1,39}$)", login)
+		}
+	}
+	for _, acct := range op.JiraAccounts {
+		if !jiraAccountRe.MatchString(acct) {
+			return fmt.Errorf("operator.jira_accounts: %q is not a valid email address", acct)
 		}
 	}
 	return nil

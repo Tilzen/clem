@@ -826,6 +826,105 @@ func TestGenerateService_GitHubWatchUnitDeps(t *testing.T) {
 	}
 }
 
+func TestGenerate_JiraBackendAlertCurl(t *testing.T) {
+	cfg := &config.Config{
+		Project: "test",
+		Coordination: config.Coordination{
+			Backend: "jira",
+			Jira: config.JiraCoordination{
+				Site:    "acme.atlassian.net",
+				Project: "ENG",
+			},
+			Channels: map[string]string{
+				"alerts": "OPS-12",
+			},
+		},
+		Agents: map[string]config.AgentConfig{
+			"worker": {
+				Name:      "Worker",
+				Model:     "claude-opus-4-7",
+				Iteration: "1m",
+				Prompt:    "do the thing",
+			},
+		},
+	}
+	out := Generate(cfg, "worker")
+	for _, want := range []string{
+		`[ -n "$JIRA_API_TOKEN" ]`,
+		`[ -n "$JIRA_USERNAME" ]`,
+		`acme.atlassian.net/rest/api/3/issue/OPS-12/comment`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("jira runner missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestGenerate_JiraBackendRegistersMCP(t *testing.T) {
+	cfg := &config.Config{
+		Project: "test",
+		Coordination: config.Coordination{
+			Backend: "jira",
+			Jira: config.JiraCoordination{
+				Site:    "acme.atlassian.net",
+				Project: "ENG",
+			},
+			Channels: map[string]string{"tasks": "clem-todo"},
+		},
+		Agents: map[string]config.AgentConfig{
+			"worker": {
+				Name:      "Worker",
+				Model:     "claude-opus-4-7",
+				Iteration: "1m",
+				Prompt:    "do the thing",
+			},
+		},
+	}
+	out := Generate(cfg, "worker")
+	for _, want := range []string{
+		`_backend = 'jira'`,
+		`if _backend == 'jira' and os.environ.get('JIRA_API_TOKEN')`,
+		`'jira-mcp'`,
+		`'https://acme.atlassian.net'`,
+		`_mcp_bin('mcp-atlassian')`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("jira runner missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestGenerateService_JiraWatchUnitDeps(t *testing.T) {
+	mockHome(t, "/home/test-worker")
+	cfg := &config.Config{
+		Project: "test",
+		Coordination: config.Coordination{
+			Backend: "jira",
+			Jira: config.JiraCoordination{
+				Site:    "acme.atlassian.net",
+				Project: "ENG",
+			},
+			Channels: map[string]string{"tasks": "clem-todo", "alerts": "OPS-1"},
+		},
+		Agents: map[string]config.AgentConfig{
+			"worker": {
+				Name:      "Worker",
+				Model:     "claude-opus-4-7",
+				Iteration: "1m",
+				Prompt:    "do the thing",
+			},
+		},
+	}
+	out, err := GenerateService(cfg, "worker")
+	if err != nil {
+		t.Fatalf("GenerateService: %v", err)
+	}
+	want := "Wants=clem-jira-watch-test-worker.service"
+	if !strings.Contains(out, want) {
+		t.Fatalf("expected %q in service unit:\n%s", want, out)
+	}
+}
+
 func TestGenerate_SkillsSyncInjectedWhenRepoSet(t *testing.T) {
 	cfg := baseCfg("worker", config.AgentConfig{
 		Name:      "Athena",

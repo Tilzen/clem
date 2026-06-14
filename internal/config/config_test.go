@@ -2146,6 +2146,77 @@ agents:
 	}
 }
 
+func TestLoad_JiraBackendValid(t *testing.T) {
+	raw := []byte(`
+project: jira-team
+coordination:
+  backend: jira
+  jira:
+    site: acme.atlassian.net
+    project: ENG
+    jql_extra: "AND sprint in openSprints()"
+  channels:
+    tasks: "clem-todo"
+    alerts: "OPS-12"
+    lessons: "OPS-34"
+agents:
+  lead:
+    name: Lead
+    model: claude-sonnet-4-6
+    iteration: 5m
+    prompt: go
+`)
+	cfg, err := Load(writeYAML(t, string(raw)))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Coordination.Jira.Site != "acme.atlassian.net" {
+		t.Fatalf("Jira.Site = %q", cfg.Coordination.Jira.Site)
+	}
+}
+
+func TestLoad_JiraBackendMissingSite(t *testing.T) {
+	raw := []byte(`
+project: jira-team
+coordination:
+  backend: jira
+  jira:
+    project: ENG
+  channels:
+    tasks: "clem-todo"
+agents:
+  lead:
+    name: Lead
+    model: claude-sonnet-4-6
+    iteration: 5m
+    prompt: go
+`)
+	_, err := Load(writeYAML(t, string(raw)))
+	if err == nil || !strings.Contains(err.Error(), "jira.site") {
+		t.Fatalf("expected jira.site error, got %v", err)
+	}
+}
+
+func TestEgressDomainsOrDefault_JiraBackendAddsSite(t *testing.T) {
+	cfg := &Config{
+		Coordination: Coordination{
+			Backend: "jira",
+			Jira:    JiraCoordination{Site: "acme.atlassian.net", Project: "ENG"},
+			Channels: map[string]string{"tasks": "clem-todo"},
+		},
+	}
+	domains := cfg.EgressDomainsOrDefault()
+	found := false
+	for _, d := range domains {
+		if d == "acme.atlassian.net" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected acme.atlassian.net for jira backend, got %v", domains)
+	}
+}
+
 func TestLoad_UnknownCoordinationBackend(t *testing.T) {
 	raw := []byte(`
 project: x

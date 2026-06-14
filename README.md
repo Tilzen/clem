@@ -57,13 +57,14 @@ What sets it apart: **secrets and egress are contained at the OS layer, not by t
 6. [Coordination backends](#coordination-backends)
 7. [Discord setup](#discord-setup)
 8. [GitHub coordination](#github-coordination)
-9. [GitHub credentials](#github-credentials)
-10. [CLI reference](#cli-reference)
-11. [`clem.yaml` reference](#clemyaml-reference)
-12. [Secrets](#secrets)
-13. [Deploy to a VPS](#deploy-to-a-vps)
-14. [Troubleshooting](#troubleshooting)
-15. [License](#license)
+9. [Jira coordination](#jira-coordination)
+10. [GitHub credentials](#github-credentials)
+11. [CLI reference](#cli-reference)
+12. [`clem.yaml` reference](#clemyaml-reference)
+13. [Secrets](#secrets)
+14. [Deploy to a VPS](#deploy-to-a-vps)
+15. [Troubleshooting](#troubleshooting)
+16. [License](#license)
 
 ---
 
@@ -172,21 +173,24 @@ Full local setup on one Linux box. If you want to provision on a separate remote
 - [`ollama-nemotron-4b`](samples/ollama-nemotron-4b/README.md) - Discord + local NVIDIA Nemotron 3 Nano 4B (~2.8 GB)
 - [`slack-nemotron-4b`](samples/slack-nemotron-4b/README.md) - Slack + same local model
 - [`github-tasks`](samples/github-tasks/README.md) - GitHub Issues coordination via `gh` CLI (no chat MCP)
+- [`jira-sprint`](samples/jira-sprint/README.md) - Jira Software sprint coordination via mcp-atlassian
 
 ```bash
 # 1. new team repo (replace with your org)
 gh repo create my-team --private --clone && cd my-team
 
-# 2. scaffold config (discord is default; use --backend github for GitHub Issues)
+# 2. scaffold config (discord is default; use --backend github or --backend jira)
 clem init
 # clem init --backend github
+# clem init --backend jira
 ```
 
 Edit `clem.yaml`:
 - Set `project:` (becomes OS user prefix, e.g. `myteam-lead`)
-- Pick `coordination.backend:` (`discord`, `slack`, or `github`)
+- Pick `coordination.backend:` (`discord`, `slack`, `github`, or `jira`)
 - **Discord/Slack:** paste server/workspace ID and channel IDs - see [Discord setup](#discord-setup) and [`samples/slack-nemotron-4b/README.md`](samples/slack-nemotron-4b/README.md).
 - **GitHub:** set `github_repo` and channel mappings - see [GitHub coordination](#github-coordination).
+- **Jira:** set `jira.site`, `jira.project`, and channel mappings - see [Jira coordination](#jira-coordination).
 - Adjust agent `name`, `role`, `model`, `iteration` (Go duration: `30s`, `1m30s`, `2h`), `runtime`, `provider`
 
 Edit `CLAUDE.shared.md` - describe your project, fill in tiers T2-T4. Edit each `CLAUDE.<agentkey>.md` with per-agent specifics.
@@ -233,8 +237,9 @@ clem logs lead
 | `discord` (default) | `#tasks` forum threads | Thread prefix `[TODO]` → `[IN PROGRESS]` | `#alerts` channel | `mcp-discord` gateway watcher | `mcp-discord` |
 | `slack` | `#tasks` top-level messages + threads | Reaction emoji on top message | `#alerts` channel | Agent polls on each iteration | `slack-mcp-server` |
 | `github` | Issues with `clem:*` labels | Self-assign via `gh issue edit` | Comment on alerts issue | `clem-github-watch` sidecar polls Issues API | None (`gh` CLI) |
+| `jira` | Issues with `clem-*` labels | Assign + re-read via jira-mcp | Comment on alerts issue | `clem-jira-watch` sidecar polls JQL | `mcp-atlassian` |
 
-GitHub coordination closes the loop between tasks and PRs: work lives in Issues on a dedicated repo, output lands in PRs with `Closes #N`. Chat backends stay better for real-time operator conversation; GitHub is better when your source of truth is already on GitHub.
+GitHub coordination closes the loop between tasks and PRs: work lives in Issues on a dedicated repo, output lands in PRs with `Closes #N`. Jira coordination targets teams whose sprint board already lives in Jira Software — agents use jira-mcp for interaction and a JQL watcher for wake. Chat backends stay better for real-time operator conversation.
 
 ---
 
@@ -325,6 +330,68 @@ Full walkthrough: [`samples/github-tasks/README.md`](samples/github-tasks/README
 
 ---
 
+## Jira coordination
+
+Use **Jira Software** as the task board. Agents discover and update work via **mcp-atlassian**
+(`jira-mcp`); `clem provision` installs a per-agent **Jira watcher sidecar** that polls the
+REST API and wakes the tmux session when new claimable issues appear.
+
+**Prerequisites:**
+
+1. Jira Cloud site (e.g. `your-org.atlassian.net`).
+2. Labels on your project: `clem-todo`, `clem-in-progress`, `clem-done`, `clem-blocked`.
+3. Two meta-issues for alerts and post-mortems; note their issue keys (e.g. `OPS-12`).
+4. `pipx install mcp-atlassian` on the host.
+5. `JIRA_USERNAME` + `JIRA_API_TOKEN` in each agent's vault (see below).
+
+**Scaffold:**
+
+```bash
+clem init --backend jira
+```
+
+**`clem.yaml` shape:**
+
+```yaml
+coordination:
+  backend: jira
+  jira:
+    site: "your-org.atlassian.net"
+    project: "ENG"
+    jql_extra: "AND sprint in openSprints()"   # optional sprint scope
+  channels:
+    tasks:   "clem-todo"
+    alerts:  "OPS-12"
+    lessons: "OPS-34"
+
+operator:
+  jira_accounts: ["you@company.com"]
+
+agents:
+  lead:
+    vaults: [github, jira]   # github for PRs, jira for task board
+```
+
+**Vault:**
+
+```bash
+clem vault set jira JIRA_USERNAME="you@company.com" JIRA_API_TOKEN="..."
+```
+
+Create an API token at https://id.atlassian.com/manage-profile/security/api-tokens
+
+**Extra systemd unit per agent:**
+
+- `clem-jira-watch-<project>-<agent>.service` — polls JQL every 60s for unassigned
+  `clem-todo` issues and sends `tmux send-keys` to wake the agent
+
+With `egress:` enabled, `{jira.site}` is automatically added to the egress allowlist when
+`backend: jira`.
+
+Full walkthrough: [`samples/jira-sprint/README.md`](samples/jira-sprint/README.md).
+
+---
+
 ## GitHub credentials
 
 Each agent needs its own GitHub token so PRs and commits show distinct authors. Required for all backends; with `backend: github` the same token also drives coordination.
@@ -357,7 +424,7 @@ Repeat per agent.
 ```
 clem --version                     Print the installed version
 clem update                        Download and install the latest release
-clem init [--backend discord|github]
+clem init [--backend discord|github|jira]
                                    Scaffold clem.yaml + CLAUDE.{shared,<agent>}.md
 clem vault init                    Generate age keypair + .sops.yaml
 clem vault set <vault> KEY=value   Set a secret in a vault
@@ -385,14 +452,18 @@ project: string             # OS user and service name prefix
 primary_milestone: string   # optional - referenced by CLAUDE.shared.md
 
 coordination:
-  backend: string           # discord (default) | slack | github
-  server_id: string         # Discord guild ID or Slack workspace ID (unused for github)
+  backend: string           # discord (default) | slack | github | jira
+  server_id: string         # Discord guild ID or Slack workspace ID (unused for github/jira)
   github_repo: string       # owner/name of task-board repo (required when backend is github)
+  jira:
+    site: string            # Atlassian Cloud hostname (required when backend is jira)
+    project: string         # Jira project key (e.g. ENG)
+    jql_extra: string       # optional JQL fragment (e.g. AND sprint in openSprints())
   channels:
     general: string         # channel ID — Discord/Slack only
-    tasks:   string         # Discord/Slack: channel ID. GitHub: label (e.g. clem:todo)
-    alerts:  string         # Discord/Slack: channel ID. GitHub: issue number
-    lessons: string         # Discord/Slack: channel ID. GitHub: issue number
+    tasks:   string         # Discord/Slack: channel ID. GitHub/Jira: label
+    alerts:  string         # Discord/Slack: channel ID. GitHub: issue number. Jira: issue key
+    lessons: string         # Discord/Slack: channel ID. GitHub: issue number. Jira: issue key
 
 agents:
   <agentkey>:               # lowercase; used in CLI + OS username
@@ -431,6 +502,7 @@ Derived names:
 - OS user: `<project>-<agentkey>` (e.g. `myteam-lead`)
 - Systemd service: `clem-<project>-<agentkey>.service`
 - GitHub issue watcher: `clem-github-watch-<project>-<agentkey>.service` (github backend only)
+- Jira issue watcher: `clem-jira-watch-<project>-<agentkey>.service` (jira backend only)
 - Web terminal: `clem-ttyd-<project>-<agentkey>.service`
 
 ---
@@ -482,6 +554,9 @@ Check `clem logs <agent>`. The runner logs MCP server startup. If `mcp-discord` 
 
 **Agent not picking up GitHub tasks**  
 Confirm `coordination.backend: github`, `github_repo`, and `channels.tasks` are set. Check the watcher: `systemctl status clem-github-watch-<project>-<agent>.service` and `~/.claude/<agent>-github-watch.log` under the agent's home. The watcher needs `GH_TOKEN` in the agent's `.env`. Open issues must have the tasks label and no assignee. With `egress:` enabled, ensure `api.github.com` is reachable through the proxy (automatically allowed when `backend: github`).
+
+**Agent not picking up Jira tasks**  
+Confirm `coordination.backend: jira`, `jira.site`, `jira.project`, and `channels.tasks` are set. Check the watcher: `systemctl status clem-jira-watch-<project>-<agent>.service` and `~/.claude/<agent>-jira-watch.log`. The watcher needs `JIRA_USERNAME` and `JIRA_API_TOKEN` in the agent's `.env`. Ensure `mcp-atlassian` is installed (`pipx install mcp-atlassian`). With `egress:` enabled, `{jira.site}` is automatically allowed when `backend: jira`.
 
 **`clem login` keeps prompting daily / `clem status` flips to `EXPIRED` every 8 hours**  
 You probably ran a clem older than v0.8.4. The Claude Max access token genuinely lasts only ~8 hours, but Claude Code refreshes it automatically using the long-lived refresh token stored alongside it. Pre-0.8.4 `clem status` displayed the *access* token expiry and pre-0.8.4 `NeedsLogin` gated on a 7-day window - so it always reported "expired" and trained operators to log in daily for nothing. Upgrade to v0.8.4+; status now shows `auto-refresh` whenever a refresh token is present, and only reports `missing` when manual `clem login` is actually required.

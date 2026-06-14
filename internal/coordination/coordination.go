@@ -6,11 +6,11 @@ import (
 )
 
 // Backend describes a coordination platform clem can use for agent task boards.
-// Three are supported today: Discord (default), Slack, and GitHub. Anything
+// Four are supported today: Discord (default), Slack, GitHub, and Jira. Anything
 // agent-facing that differs between platforms — MCP server name, channel ID
 // format, alert POST URL — lives here.
 type Backend struct {
-	Name           string // "discord" | "slack" | "github"
+	Name           string // "discord" | "slack" | "github" | "jira"
 	MCPName        string // the key used in .mcp.json
 	MCPBinary      string // absolute path to the MCP server binary
 	TokenEnvVar    string // env-var name the MCP server reads for auth
@@ -20,9 +20,11 @@ type Backend struct {
 
 // AlertParams carries the per-config values that expand AlertTemplate.
 type AlertParams struct {
-	// Channel is a Discord channel ID, Slack channel ID, or GitHub issue number.
+	// Channel is a Discord channel ID, Slack channel ID, GitHub issue number,
+	// or Jira issue key (e.g. OPS-12).
 	Channel string
-	// Repo is the GitHub owner/name — only used when Name == "github".
+	// Repo is the GitHub owner/name when Name == "github", or the Jira site
+	// hostname (e.g. acme.atlassian.net) when Name == "jira".
 	Repo string
 	// Message is the alert body (may be a bash variable like $safe_msg).
 	Message string
@@ -33,7 +35,7 @@ type AlertParams struct {
 // (repo, issue number, message).
 func RenderAlert(b Backend, p AlertParams) string {
 	switch b.Name {
-	case "github":
+	case "github", "jira":
 		return fmt.Sprintf(b.AlertTemplate, p.Repo, p.Channel, p.Message)
 	default:
 		return fmt.Sprintf(b.AlertTemplate, p.Channel, p.Message)
@@ -46,9 +48,15 @@ func AlertCurlGuard(b Backend, channel, body string) string {
 	if b.Name == "github" && strings.TrimSpace(channel) == "" {
 		return "true"
 	}
+	if b.Name == "jira" && strings.TrimSpace(channel) == "" {
+		return "true"
+	}
 	guard := fmt.Sprintf(`[ -n "$%s" ]`, b.TokenEnvVar)
-	if b.Name == "github" {
+	if b.Name == "github" || b.Name == "jira" {
 		guard += fmt.Sprintf(` && [ -n "%s" ]`, strings.TrimSpace(channel))
+	}
+	if b.Name == "jira" {
+		guard += ` && [ -n "$JIRA_USERNAME" ]`
 	}
 	return guard + ` && ` + body
 }
@@ -63,8 +71,10 @@ func Known(name string) (Backend, error) {
 		return slack, nil
 	case "github":
 		return github, nil
+	case "jira":
+		return jira, nil
 	default:
-		return Backend{}, fmt.Errorf("unknown coordination backend %q (valid: discord, slack, github)", name)
+		return Backend{}, fmt.Errorf("unknown coordination backend %q (valid: discord, slack, github, jira)", name)
 	}
 }
 
@@ -109,4 +119,21 @@ Each task = one open issue. Status is tracked with labels: clem:todo →
 clem:in-progress → clem:done or clem:blocked. Claim by self-assigning
 (gh issue edit N --add-assignee @me), then re-read the issue to confirm you
 won the claim. Report status via issue comments. Link PRs with "Closes #N".`,
+}
+
+var jira = Backend{
+	Name:        "jira",
+	MCPName:     "jira-mcp",
+	MCPBinary:   "/usr/local/bin/mcp-atlassian",
+	TokenEnvVar: "JIRA_API_TOKEN",
+	// Site hostname and issue key come from coordination.jira.site and channels.alerts.
+	AlertTemplate: `curl -s -X POST "https://%s/rest/api/3/issue/%s/comment" \
+        -u "$JIRA_USERNAME:$JIRA_API_TOKEN" -H "Content-Type: application/json" \
+        -H "Accept: application/json" \
+        -d "{\"body\":{\"type\":\"doc\",\"version\":1,\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"%s\"}]}]}}" > /dev/null 2>&1`,
+	TaskBoardNotes: `Task board lives in the configured Jira project (jira.project). Each task =
+one issue with the label from channels.tasks (e.g. clem-todo). Status via labels:
+clem-todo → clem-in-progress → clem-done or clem-blocked. Discover work with
+jira_search (JQL) or the jira-mcp tools; claim by assigning yourself, then
+re-read the issue to confirm you won the claim. Report via issue comments.`,
 }

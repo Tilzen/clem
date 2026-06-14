@@ -401,3 +401,76 @@ jobs:
           sudo systemd-analyze verify /etc/systemd/system/clem-github-watch-ghtest-lead.service
           sudo grep -q 'Wants=clem-github-watch-ghtest-lead.service' /etc/systemd/system/clem-ghtest-lead.service
           sudo grep -q 'JoinsNamespaceOf=clem-ghtest-lead.service' /etc/systemd/system/clem-github-watch-ghtest-lead.service
+
+  jira-coordination:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - name: Install runtime deps (tmux, age, sops, yq, python3)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            tmux age python3 python3-pip
+          sudo curl -sSL -o /usr/local/bin/sops \
+            https://github.com/getsops/sops/releases/download/v3.12.2/sops-v3.12.2.linux.amd64
+          sudo chmod +x /usr/local/bin/sops
+          sudo curl -sSL -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Build clem
+        run: go build -o clem .
+
+      - name: Prepare Jira coordination project
+        run: |
+          mkdir -p /tmp/jira && cd /tmp/jira
+          cat > clem.yaml <<'EOF'
+          project: jiratest
+          coordination:
+            backend: jira
+            jira:
+              site: acme.atlassian.net
+              project: ENG
+              jql_extra: "AND sprint in openSprints()"
+            channels:
+              tasks: "clem-todo"
+              alerts: "OPS-12"
+              lessons: "OPS-34"
+          agents:
+            lead:
+              name: "JiraLead"
+              role: "tester"
+              model: "claude-sonnet-4-6"
+              iteration: 5m
+              vaults: [jira, github]
+          EOF
+          "$GITHUB_WORKSPACE/clem" vault init
+          "$GITHUB_WORKSPACE/clem" vault set jira JIRA_USERNAME=bot@acme.com JIRA_API_TOKEN=fakefortesting
+
+      - name: Run clem provision
+        run: |
+          cd /tmp/jira
+          sudo -E "$GITHUB_WORKSPACE/clem" provision 2>&1 | tee /tmp/jira-provision.log
+          tail -20 /tmp/jira-provision.log
+
+      - name: Assert - Jira watch sidecar installed
+        run: |
+          watch=/home/jiratest-lead/.local/bin/clem-jira-watch.sh
+          sudo test -x "$watch"
+          sudo bash -n "$watch"
+          sudo grep -q '/rest/api/3/search' "$watch"
+          sudo grep -q 'sprint in openSprints' "$watch"
+          sudo grep -q 'tmux send-keys' "$watch"
+          sudo test -f /etc/systemd/system/clem-jira-watch-jiratest-lead.service
+          sudo systemd-analyze verify /etc/systemd/system/clem-jira-watch-jiratest-lead.service
+          sudo grep -q 'Wants=clem-jira-watch-jiratest-lead.service' /etc/systemd/system/clem-jiratest-lead.service
+          runner=/home/jiratest-lead/.local/bin/clem-runner.sh
+          sudo grep -q "mcp-atlassian" "$runner"
+          sudo grep -q "acme.atlassian.net" "$runner"

@@ -8,6 +8,7 @@ Samples today:
 - [`anthropic/`](anthropic/) - **Discord** coordination + [Anthropic Claude API](https://www.anthropic.com/). Bring your own API key; no local GPU needed — the zero-setup way to try clem. Published as `ghcr.io/jahwag/clem-sample:latest`.
 - [`ollama-mellum2/`](ollama-mellum2/) - **Discord** coordination + local [JetBrains Mellum 2](https://www.jetbrains.com/mellum/) (code specialist, Apache-2.0) via Ollama. MoE, native tool_use, ~16 GB RAM. Published as `ghcr.io/jahwag/clem-sample:latest-mellum2`.
 - [`github-tasks/`](github-tasks/) - **GitHub Issues** coordination via `gh` CLI (no chat MCP). Task board lives in a dedicated repo with `clem:*` labels.
+- [`jira-sprint/`](jira-sprint/) - **Jira Software** sprint coordination via mcp-atlassian + JQL watcher sidecar.
 - [`secure-fleet/`](secure-fleet/) - security-hardened multi-agent fleet — egress controls, resource limits, vault isolation. A configuration reference, not a model demo.
 
 ## Quick start (prebuilt image)

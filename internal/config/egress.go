@@ -83,18 +83,28 @@ func (e EgressConfig) DomainsOrDefault() []string {
 }
 
 // EgressDomainsOrDefault returns the egress allowlist for a fleet, appending
-// api.github.com when GitHub coordination is enabled.
+// coordination-backend API hosts when needed.
 func (c *Config) EgressDomainsOrDefault() []string {
 	domains := c.Egress.DomainsOrDefault()
-	if !c.UsesGitHubCoordination() {
-		return domains
+	if c.UsesGitHubCoordination() {
+		domains = appendDomainIfMissing(domains, "api.github.com")
 	}
+	if c.UsesJiraCoordination() {
+		site := c.Coordination.Jira.Site
+		if site != "" {
+			domains = appendDomainIfMissing(domains, site)
+		}
+	}
+	return domains
+}
+
+func appendDomainIfMissing(domains []string, host string) []string {
 	for _, d := range domains {
-		if d == "api.github.com" {
+		if d == host {
 			return domains
 		}
 	}
-	return append(append([]string(nil), domains...), "api.github.com")
+	return append(append([]string(nil), domains...), host)
 }
 
 // EgressEnabledFor reports whether egress containment applies to an agent.
