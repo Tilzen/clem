@@ -1,0 +1,57 @@
+project: quality-demo
+coordination:
+  backend: discord
+  server_id: "${DISCORD_SERVER_ID}"
+  channels:
+    general: "${DISCORD_GENERAL_CHANNEL}"
+    tasks: "${DISCORD_TASKS_CHANNEL}"
+    alerts: "${DISCORD_ALERTS_CHANNEL}"
+
+quality:
+  enabled: true
+  on_failure: feedback
+  max_attempts: 3
+  baseline_suite: [build, unit, lint]
+  gates:
+    - name: build
+      level: build
+      cmd: "go build ./..."
+      blocking: true
+      timeout: 120s
+    - name: unit
+      level: unit
+      cmd: "go test ./..."
+      blocking: true
+      timeout: 300s
+    - name: lint
+      level: lint
+      cmd: "golangci-lint run"
+      blocking: false
+      timeout: 120s
+    - name: integration
+      level: integration
+      cmd: "go test ./... -tags=integration"
+      agents: [lead]
+      blocking: true
+      timeout: 600s
+
+agents:
+  lead:
+    name: "Quality Lead"
+    role: "Implement features with passing gates before PR"
+    model: "claude-sonnet-4-6"
+    iteration: "5m"
+    prompt: |
+      You are the quality-demo lead. Fix failing quality gates before marking work done.
+    # default = baseline + integration (agents: [lead])
+    quality_suite: [+integration]
+
+  reviewer:
+    name: "Quality Reviewer"
+    role: "Review with baseline gates only"
+    model: "claude-sonnet-4-6"
+    iteration: "5m"
+    prompt: |
+      You are the reviewer. Baseline gates run automatically; no integration suite.
+    # explicit subset — no lint, no integration
+    quality_suite: [build, unit]

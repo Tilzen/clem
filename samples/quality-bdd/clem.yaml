@@ -1,0 +1,39 @@
+project: quality-bdd-demo
+coordination:
+  backend: discord
+  server_id: "${DISCORD_SERVER_ID}"
+  channels:
+    general: "${DISCORD_GENERAL_CHANNEL}"
+    tasks: "${DISCORD_TASKS_CHANNEL}"
+    alerts: "${DISCORD_ALERTS_CHANNEL}"
+
+quality:
+  enabled: true
+  on_failure: feedback
+  max_attempts: 5
+  gates:
+    - name: unit
+      level: unit
+      cmd: "go test ./..."
+      blocking: true
+      timeout: 300s
+    - name: acceptance
+      kind: bdd
+      level: acceptance
+      specs:
+        - features/
+      runner: godog
+      blocking: true
+      timeout: 600s
+
+agents:
+  lead:
+    name: "Spec Lead"
+    role: "Implement against living Gherkin specs; fix failing scenarios before [DONE]"
+    model: "claude-sonnet-4-6"
+    iteration: "5m"
+    prompt: |
+      Specs in features/ define expected behaviour. When quality gates fail,
+      read the injected feedback block in CLAUDE.local.md and align code to the
+      failing Feature/Scenario — do not guess requirements from memory.
+    quality_suite: [unit, acceptance]

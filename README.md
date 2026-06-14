@@ -43,6 +43,7 @@ What sets it apart: **secrets and egress are contained at the OS layer, not by t
 | **Self-healing** | systemd + tmux per agent. Watchdog timer restarts dead or stalled sessions. Alerts fire only after repeated failures. |
 | **Bring your own model** | Default Claude; one flag away from Ollama Cloud / Bedrock / Vertex / local models. Tested end-to-end on local Gemma 4 (E4B QAT via Ollama). |
 | **Live ops** | `clem status` shows health per agent. Optional ttyd web terminal per agent - attach in your browser. |
+| **Quality gates** | Optional closed feedback loop: deterministic build/test/lint/BDD checks after each session, with per-agent suites and fleet metrics. See [docs/quality-gates.md](docs/quality-gates.md). |
 | **Works locally** | Laptop, home server, Raspberry Pi, small VPS. No Kubernetes. No cloud services required. |
 
 ---
@@ -432,6 +433,16 @@ Derived names:
 - Systemd service: `clem-<project>-<agentkey>.service`
 - GitHub issue watcher: `clem-github-watch-<project>-<agentkey>.service` (github backend only)
 - Web terminal: `clem-ttyd-<project>-<agentkey>.service`
+
+**Quality gates** (optional, `quality.enabled: true`):
+
+Deterministic checks run automatically after each agent session. Failures feed back
+into the next iteration via `CLAUDE.local.md`; successes clear the feedback
+block. Supports fleet-wide baseline gates, agent-restricted gates, inline
+per-agent gates, and Gherkin/BDD acceptance specs.
+
+→ Full workflow, configuration, and fleet suite model: **[docs/quality-gates.md](docs/quality-gates.md)**.
+Samples: [`samples/quality-go/`](samples/quality-go/) · [`samples/quality-bdd/`](samples/quality-bdd/)
 
 ---
 

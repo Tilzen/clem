@@ -9,6 +9,8 @@ Samples today:
 - [`ollama-mellum2/`](ollama-mellum2/) - **Discord** coordination + local [JetBrains Mellum 2](https://www.jetbrains.com/mellum/) (code specialist, Apache-2.0) via Ollama. MoE, native tool_use, ~16 GB RAM. Published as `ghcr.io/jahwag/clem-sample:latest-mellum2`.
 - [`github-tasks/`](github-tasks/) - **GitHub Issues** coordination via `gh` CLI (no chat MCP). Task board lives in a dedicated repo with `clem:*` labels.
 - [`secure-fleet/`](secure-fleet/) - security-hardened multi-agent fleet — egress controls, resource limits, vault isolation. A configuration reference, not a model demo.
+- [`quality-go/`](quality-go/) - **Quality gates** — deterministic build/test/lint with closed feedback loop.
+- [`quality-bdd/`](quality-bdd/) - **SDD/BDD** — living Gherkin specs (`features/`) as executable acceptance gates via `kind: bdd`.
 
 ## Quick start (prebuilt image)
 
