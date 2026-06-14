@@ -145,6 +145,33 @@ func TestSet_RejectsMalformedKeyval(t *testing.T) {
 	}
 }
 
+func TestSet_BlocksShellInjectionKeyName(t *testing.T) {
+	dir := t.TempDir()
+	pwned := filepath.Join(dir, "pwned-marker")
+	envLine := "export MY_KEY; touch " + pwned + "\n"
+	envFile := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envFile, []byte(envLine), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-c", "source "+envFile)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("source .env: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(pwned); err != nil {
+		t.Fatal("sanity: malicious export line must execute injected command when sourced")
+	}
+
+	cleanup := setupVaultDir(t)
+	defer cleanup()
+	err := Set("v1", "MY_KEY; touch /tmp/ignored=secret")
+	if err == nil {
+		t.Fatal("Set should reject malicious key name before it reaches WriteEnvFile")
+	}
+	if !strings.Contains(err.Error(), "valid env var name") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidateSecretKey_RejectsUnsafeNames(t *testing.T) {
 	cleanup := setupVaultDir(t)
 	defer cleanup()
