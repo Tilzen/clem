@@ -11,6 +11,7 @@ import (
 	"github.com/jahwag/clem/internal/config"
 	"github.com/jahwag/clem/internal/githubwatch"
 	"github.com/jahwag/clem/internal/proxy"
+	"github.com/jahwag/clem/internal/quality"
 	"github.com/jahwag/clem/internal/remote"
 	"github.com/jahwag/clem/internal/runner"
 	"github.com/jahwag/clem/internal/vault"
@@ -201,6 +202,21 @@ func provisionAgent(agentKey string, ac config.AgentConfig) error {
 		if err := agent.EnsureOwnedDir(d, osUser); err != nil {
 			return fmt.Errorf("ensuring %s: %w", d, err)
 		}
+	}
+	if cfg.Quality != nil && cfg.Quality.Enabled {
+		clemDir := filepath.Join(homeDir, ".clem")
+		if err := agent.EnsureOwnedDir(clemDir, osUser); err != nil {
+			return fmt.Errorf("ensuring %s: %w", clemDir, err)
+		}
+		rc, err := cfg.RuntimeQualityForAgent(agentKey)
+		if err != nil {
+			return fmt.Errorf("quality config for %s: %w", agentKey, err)
+		}
+		if err := quality.WriteRuntimeConfig(homeDir, rc); err != nil {
+			return fmt.Errorf("writing quality config for %s: %w", agentKey, err)
+		}
+		chownDir(filepath.Join(homeDir, ".clem", "quality.json"), osUser)
+		fmt.Printf("  wrote %s/.clem/quality.json\n", homeDir)
 	}
 	content, mode, err := agentdoc.Render(cfg, agentKey, ".")
 	if err != nil {

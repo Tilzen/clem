@@ -56,6 +56,13 @@ func loadConfig(cmd *cobra.Command, args []string) error {
 	if cmd.Name() == "sync-skills" {
 		return nil
 	}
+	// quality run/pre-push runs as the agent user with runtime config in ~/.clem/
+	if cmd.Name() == "quality" {
+		return nil
+	}
+	if cmd.Parent() != nil && cmd.Parent().Name() == "quality" {
+		return nil
+	}
 
 	var err error
 	cfg, err = config.Load(configPath)

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jahwag/clem/internal/agent"
+	"github.com/jahwag/clem/internal/quality"
 	"github.com/spf13/cobra"
 )
 
@@ -29,9 +30,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	sort.Strings(keys)
 
 	// Header
-	fmt.Printf("%-10s %-20s %-20s %-8s %-8s %-8s %-20s %s\n",
-		"AGENT", "NAME", "USER", "SYSTEMD", "TMUX", "TTYD", "TOKEN EXPIRES", "LAST LOG")
-	fmt.Println(strings.Repeat("-", 120))
+	fmt.Printf("%-10s %-20s %-20s %-8s %-8s %-8s %-10s %-20s %s\n",
+		"AGENT", "NAME", "USER", "SYSTEMD", "TMUX", "TTYD", "QUALITY", "TOKEN EXPIRES", "LAST LOG")
+	fmt.Println(strings.Repeat("-", 130))
 
 	for _, agentKey := range keys {
 		ac := cfg.Agents[agentKey]
@@ -62,8 +63,20 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		logPath := fmt.Sprintf("/home/%s/.claude/%s-runner.log", osUser, agentKey)
 		lastLog := agent.LastLogLine(logPath)
 
-		fmt.Printf("%-10s %-20s %-20s %-8s %-8s %-8s %-20s %s\n",
-			agentKey, ac.Name, osUser, systemdState, tmuxAlive, ttydStr, expiryStr, lastLog)
+		qualityStr := "-"
+		if cfg.Quality != nil && cfg.Quality.Enabled {
+			sum, err := quality.ReadAgentSummary(homeDir, agentKey)
+			if err == nil && sum.GatesTotal > 0 {
+				if sum.LastPass {
+					qualityStr = fmt.Sprintf("✅ %d/%d", sum.GatesPass, sum.GatesTotal)
+				} else {
+					qualityStr = fmt.Sprintf("❌ %d/%d", sum.GatesPass, sum.GatesTotal)
+				}
+			}
+		}
+
+		fmt.Printf("%-10s %-20s %-20s %-8s %-8s %-8s %-10s %-20s %s\n",
+			agentKey, ac.Name, osUser, systemdState, tmuxAlive, ttydStr, qualityStr, expiryStr, lastLog)
 	}
 	return nil
 }

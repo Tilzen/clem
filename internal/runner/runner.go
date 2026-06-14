@@ -130,6 +130,8 @@ while true; do
     PROMPT='{{.Prompt}}'
     RUNNER_WARNINGS=""
 
+    {{.QualityFeedbackLoad}}
+
     # Guard: CLAUDE.local.md too large (token waste)
     if [ -f "$WORKDIR/CLAUDE.local.md" ]; then
         SIZE=$(stat -c %s "$WORKDIR/CLAUDE.local.md" 2>/dev/null || echo 0)
@@ -209,6 +211,8 @@ while true; do
     EXIT_CODE=$?
     ELAPSED=$(( $(date +%s) - START ))
     log "Exited $EXIT_CODE after ${ELAPSED}s"
+
+    {{.QualityRunCmd}}
 
     HOUR=$(date +%H)
     if [ "$HOUR" -ge 7 ] && [ "$HOUR" -lt 22 ]; then
@@ -312,6 +316,8 @@ while true; do
     PROMPT='{{.Prompt}}'
     RUNNER_WARNINGS=""
 
+    {{.QualityFeedbackLoad}}
+
     # Guard: CLAUDE.local.md too large (token waste)
     if [ -f "$WORKDIR/CLAUDE.local.md" ]; then
         SIZE=$(stat -c %s "$WORKDIR/CLAUDE.local.md" 2>/dev/null || echo 0)
@@ -337,6 +343,8 @@ while true; do
     EXIT_CODE=$?
     ELAPSED=$(( $(date +%s) - START ))
     log "Exited $EXIT_CODE after ${ELAPSED}s"
+
+    {{.QualityRunCmd}}
 
     HOUR=$(date +%H)
     if [ "$HOUR" -ge 7 ] && [ "$HOUR" -lt 22 ]; then
@@ -458,6 +466,12 @@ type RunnerParams struct {
 	// to refresh the agent's ~/.claude/skills/ symlinks from the team skills
 	// repo. Empty when cfg.SkillsRepo is unset, in which case no sync runs.
 	SkillsSyncCmd string
+	// QualityFeedbackLoad prepends prior gate failure context to the prompt.
+	QualityFeedbackLoad string
+	// QualityRunCmd runs the post-session quality suite via clem quality run.
+	QualityRunCmd string
+	// QualityBlockedAlert is the alert curl for max-attempts exhaustion.
+	QualityBlockedAlert string
 }
 
 // bashDoubleQuoteEscaper escapes the four characters that stay live inside a
@@ -558,6 +572,10 @@ func Generate(cfg *config.Config, agentKey string) string {
 		SidecarServers:      sidecarServersLiteral(cfg, agentKey),
 		SkillsSyncCmd:       skillsSyncCmd,
 	}
+	feedbackLoad, runCmd, blockedAlert := qualityRunnerSnippets(cfg, agentKey, ac, alertChannel, backend)
+	p.QualityFeedbackLoad = feedbackLoad
+	p.QualityRunCmd = renderTemplate(runCmd, RunnerParams{QualityBlockedAlert: blockedAlert})
+	p.QualityBlockedAlert = blockedAlert
 	switch ac.RuntimeKind() {
 	case "opencode":
 		return renderTemplate(opencodeRunnerTemplate, p)
@@ -717,6 +735,9 @@ func renderTemplate(tmpl string, p RunnerParams) string {
 		"{{.CoordinationBackend}}", p.CoordinationBackend,
 		"{{.GitHubWatchUnitDeps}}", p.GitHubWatchUnitDeps,
 		"{{.SkillsSyncCmd}}", p.SkillsSyncCmd,
+		"{{.QualityFeedbackLoad}}", p.QualityFeedbackLoad,
+		"{{.QualityRunCmd}}", p.QualityRunCmd,
+		"{{.QualityBlockedAlert}}", p.QualityBlockedAlert,
 	)
 	return r.Replace(tmpl)
 }
@@ -735,6 +756,33 @@ func sidecarServersLiteral(cfg *config.Config, agentKey string) string {
 		}
 	}
 	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+func qualityRunnerSnippets(cfg *config.Config, agentKey string, ac config.AgentConfig, alertChannel string, backend coordination.Backend) (feedbackLoad, runCmd, blockedAlert string) {
+	if cfg.Quality == nil || !cfg.Quality.Enabled {
+		return "", "", ""
+	}
+	feedbackLoad = `if [ -f "$HOME/.clem/quality-feedback.txt" ]; then
+        RUNNER_WARNINGS="${RUNNER_WARNINGS}$(cat "$HOME/.clem/quality-feedback.txt") "
+    fi`
+	runCmd = `if [ -f "$HOME/.clem/quality.json" ]; then
+        QUALITY_RC=0
+        clem quality run --home "$HOME" --workdir "$WORKDIR" || QUALITY_RC=$?
+        log "Quality gates finished (rc=${QUALITY_RC})"
+        if [ "$QUALITY_RC" -eq 2 ]; then
+            log "Quality gates exhausted max attempts — alerting"
+            source "$HOME/.env" 2>/dev/null
+            {{.QualityBlockedAlert}}
+        fi
+    fi`
+	blockedMsg := fmt.Sprintf("⚠️ %s: quality gates failed repeatedly — task [BLOCKED]. Manual intervention required.", escapeForAlert(ac.Name))
+	blockedBody := coordination.RenderAlert(backend, coordination.AlertParams{
+		Repo:    cfg.Coordination.GithubRepo,
+		Channel: alertChannel,
+		Message: blockedMsg,
+	})
+	blockedAlert = coordination.AlertCurlGuard(backend, alertChannel, blockedBody)
+	return feedbackLoad, runCmd, blockedAlert
 }
 
 // watchChannelIDs returns coordination-backend-specific watcher configuration

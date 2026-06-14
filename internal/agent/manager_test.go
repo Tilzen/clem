@@ -140,6 +140,9 @@ func TestPrePushHookContent_IsExecutableBash(t *testing.T) {
 	if !strings.Contains(prePushHookContent, PrePushAllowSecretMarker) {
 		t.Errorf("pre-push hook should embed allow-marker %q so bash and Go agree on the bypass token", PrePushAllowSecretMarker)
 	}
+	if !strings.Contains(prePushHookContent, "clem quality pre-push") {
+		t.Error("pre-push hook should invoke quality pre-push when quality.json exists")
+	}
 	if !strings.Contains(prePushHookContent, `grep -E '^\+([^+]|$)'`) {
 		t.Error("pre-push hook should restrict secret-pattern scanning to ADDED diff lines (^+ excluding ^+++)")
 	}

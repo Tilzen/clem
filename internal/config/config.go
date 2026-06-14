@@ -172,6 +172,9 @@ type Config struct {
 	// The cache directory name is derived from the URL's last path segment
 	// (with .git stripped).
 	SkillsRepo string `yaml:"skills_repo"`
+	// Quality configures deterministic quality gates (test, lint, build, etc.).
+	// Disabled by default for zero regression.
+	Quality *QualityConfig `yaml:"quality"`
 	// Extra collects top-level keys not matched by any field above (the
 	// decoder is otherwise strict — see Load). Only "x-"-prefixed extension
 	// keys are accepted, as holders for shared YAML anchors (the
@@ -313,6 +316,12 @@ type AgentConfig struct {
 	// (e.g. CI runners on the same VPS) so one cannot starve the other.
 	// Empty fields are omitted from the generated unit — systemd defaults apply.
 	ResourceLimits ResourceLimits `yaml:"resource_limits"`
+	// QualitySuite selects gates for this agent. Empty = baseline + agent-specific
+	// gates. Use "inherit" or "+gate" entries to extend the default suite.
+	// An explicit list (no inherit/+) replaces the default entirely.
+	QualitySuite []string `yaml:"quality_suite"`
+	// QualityGates defines agent-local gates not shared with the fleet.
+	QualityGates []QualityGate `yaml:"quality_gates"`
 }
 
 // ResourceLimits maps directly to systemd cgroup directives. All fields
@@ -544,6 +553,11 @@ func Load(path string) (*Config, error) {
 	if cfg.SkillsRepo != "" && !isPlausibleGitURL(cfg.SkillsRepo) {
 		return nil, fmt.Errorf("skills_repo %q is not a recognized git URL (expected https://, git://, ssh://, or git@host:path)", cfg.SkillsRepo)
 	}
+	if cfg.Quality != nil {
+		if err := cfg.Quality.validate(); err != nil {
+			return nil, err
+		}
+	}
 	switch cfg.Egress.Posture {
 	case "", "strict", "balanced", "audit":
 		// valid
@@ -674,7 +688,22 @@ func Load(path string) (*Config, error) {
 		if err := ac.validateExtensions(key); err != nil {
 			return nil, err
 		}
+		if err := validateAgentQualitySuite(&cfg, key, ac.QualitySuite); err != nil {
+			return nil, err
+		}
+		if err := validateAgentQualityGates(&cfg, key, ac.QualityGates); err != nil {
+			return nil, err
+		}
 		cfg.Agents[key] = ac
+	}
+	if cfg.Quality != nil {
+		agentKeys := make(map[string]bool, len(cfg.Agents))
+		for key := range cfg.Agents {
+			agentKeys[key] = true
+		}
+		if err := cfg.Quality.validateAgents(agentKeys); err != nil {
+			return nil, err
+		}
 	}
 	if err := cfg.validateVaultServices(); err != nil {
 		return nil, err

@@ -623,6 +623,14 @@ while read local_ref local_sha remote_ref remote_sha; do
     fi
   fi
 done
+
+# Pass 5: quality gates (when provisioned with quality.enabled).
+if [ -f "$HOME/.clem/quality.json" ]; then
+  if ! clem quality pre-push --home "$HOME" 2>&1; then
+    echo "clem pre-push hook: push blocked - quality gates failed" >&2
+    exit 1
+  fi
+fi
 exit 0
 `, PrePushAllowSecretMarker, SecretPatternRegex, SecretCodePatternRegex, UnicodeTrapBytesPattern, PrePushAllowSecretMarker)
 
