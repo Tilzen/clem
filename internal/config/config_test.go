@@ -372,6 +372,86 @@ agents:
 	}
 }
 
+// vaultBackendsYAML builds a config with the given vault.backends block.
+func vaultBackendsYAML(backendsBlock string) string {
+	return `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+operator:
+  discord_ids: ["277434478803156993"]
+vault:
+` + backendsBlock + `
+agents:
+  lead:
+    name: "Lead"
+    model: "claude-sonnet-4-6"
+`
+}
+
+func TestLoad_VaultBackends_Valid(t *testing.T) {
+	path := writeYAML(t, vaultBackendsYAML(`  backends:
+    - name: local
+      type: sops`))
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("valid backends should load: %v", err)
+	}
+	if len(cfg.Vault.Backends) != 1 || cfg.Vault.Backends[0].Name != "local" {
+		t.Errorf("backends not parsed: %+v", cfg.Vault.Backends)
+	}
+}
+
+func TestLoad_VaultBackends_UnknownTypeRejected(t *testing.T) {
+	path := writeYAML(t, vaultBackendsYAML(`  backends:
+    - name: hv
+      type: hashicorp`))
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unknown vault source type")
+	}
+	if !strings.Contains(err.Error(), "hashicorp") || !strings.Contains(err.Error(), "sops") {
+		t.Errorf("error should name the bad type and the valid set, got: %v", err)
+	}
+}
+
+func TestLoad_VaultBackends_DuplicateNameRejected(t *testing.T) {
+	path := writeYAML(t, vaultBackendsYAML(`  backends:
+    - name: local
+      type: sops
+    - name: local
+      type: sops`))
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for duplicate backend name")
+	}
+}
+
+func TestLoad_VaultBackends_SecondSopsRejected(t *testing.T) {
+	path := writeYAML(t, vaultBackendsYAML(`  backends:
+    - name: local
+      type: sops
+    - name: extra
+      type: sops`))
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for second sops backend")
+	}
+	if !strings.Contains(err.Error(), "at most one sops") {
+		t.Errorf("error should explain the single-sops constraint, got: %v", err)
+	}
+}
+
+func TestLoad_VaultBackends_BadNameRejected(t *testing.T) {
+	path := writeYAML(t, vaultBackendsYAML(`  backends:
+    - name: "Bad Name"
+      type: sops`))
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for invalid backend name")
+	}
+}
+
 func TestLoad_PrimaryMilestoneParsed(t *testing.T) {
 	path := writeYAML(t, `
 project: myteam

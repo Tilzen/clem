@@ -56,6 +56,30 @@ type VaultBackend struct {
 	// every service whose keys an agent brokers into that agent's consolidated
 	// vault. A brokered secret with no matching service egresses as a placeholder.
 	Services []Service `yaml:"services"`
+	// Backends lists secret source backends in merge order (#174). Empty means
+	// the implicit default [{name: local, type: sops}] — today's behavior.
+	// Later sources win on key conflicts, mirroring the per-source bucket
+	// merge. Distinct from Backend above, which selects how secrets are
+	// materialized for agents (env vs agent-vault broker); Backends selects
+	// where secrets come from.
+	Backends []VaultSource `yaml:"backends"`
+}
+
+// ValidVaultSourceTypes is the authoritative set of vault.backends source
+// types. Load() validates against it; the dispatch switch in internal/vault
+// must handle every type listed here, so add new types (#174: infisical) to
+// both in one change.
+var ValidVaultSourceTypes = []string{"sops"}
+
+// VaultSource is one entry in vault.backends: a named secret source backend.
+// Only sops is implemented today; Infisical Agent lands behind the same
+// interface (#174).
+type VaultSource struct {
+	// Name qualifies bucket refs and appears in error messages. Must match
+	// validName and be unique across backends.
+	Name string `yaml:"name"`
+	// Type is the backend implementation. Empty defaults to sops.
+	Type string `yaml:"type"`
 }
 
 // Service is one agent-vault injection rule: for requests to Host, attach the

@@ -37,8 +37,12 @@ func init() {
 
 // decryptForAgent is the vault decryption entry point used by provisioning.
 // A package-level seam (same pattern as agent.sys / runner.userHomeLookup) so
-// tests can exercise the env-construction logic without sops on PATH.
-var decryptForAgent = vault.DecryptForAgent
+// tests can exercise the env-construction logic without sops on PATH. Routes
+// through the configured vault.backends sources (#174); the empty default
+// resolves to the implicit sops source, preserving legacy behavior.
+var decryptForAgent = func(agentKey string, buckets []string) (map[string]string, error) {
+	return vault.DecryptAgentSecrets(cfg.Vault.Backends, agentKey, buckets)
+}
 
 func runProvision(cmd *cobra.Command, args []string) error {
 	if provisionRemote != "" {

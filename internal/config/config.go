@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -565,6 +566,28 @@ func Load(path string) (*Config, error) {
 		// valid
 	default:
 		return nil, fmt.Errorf("vault.backend must be env or agent-vault, got %q", cfg.Vault.Backend)
+	}
+	sourceNames := make(map[string]bool, len(cfg.Vault.Backends))
+	sawSops := false
+	for _, b := range cfg.Vault.Backends {
+		if !validName.MatchString(b.Name) {
+			return nil, fmt.Errorf("vault.backends: name must match %s, got %q", validName.String(), b.Name)
+		}
+		if sourceNames[b.Name] {
+			return nil, fmt.Errorf("vault.backends: duplicate name %q", b.Name)
+		}
+		sourceNames[b.Name] = true
+		if b.Type != "" && !slices.Contains(ValidVaultSourceTypes, b.Type) {
+			return nil, fmt.Errorf("vault.backends %s: unknown type %q (valid: %s)", b.Name, b.Type, strings.Join(ValidVaultSourceTypes, ", "))
+		}
+		if b.Type == "" || b.Type == "sops" {
+			// All sops sources read the same secrets.sops.yaml, so a second
+			// one only re-decrypts the file and can never change the merge.
+			if sawSops {
+				return nil, fmt.Errorf("vault.backends: at most one sops backend (all read the same secrets.sops.yaml)")
+			}
+			sawSops = true
+		}
 	}
 	usedPorts := make(map[int]string)
 	// Reserve the egress proxy port so no agent's web terminal collides with it.
