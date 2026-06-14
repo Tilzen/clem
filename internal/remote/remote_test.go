@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -113,5 +114,52 @@ func TestAgeKeyPath_UnderHomeConfig(t *testing.T) {
 	p := AgeKeyPath()
 	if !strings.HasSuffix(p, ".config/sops/age/keys.txt") {
 		t.Errorf("AgeKeyPath = %q, want ~/.config/sops/age/keys.txt", p)
+	}
+}
+
+func TestBug127_TokenCleanupFailureAbortsProvision(t *testing.T) {
+	// Before fix: _ = SSH(host, fixRemote) discarded errors — token persisted silently.
+	old := remoteSSH
+	defer func() { remoteSSH = old }()
+	var gotCmd string
+	remoteSSH = func(host, cmd string) error {
+		gotCmd = cmd
+		return fmt.Errorf("simulated ssh failure")
+	}
+	err := stripCloneTokenFromRemote("myhost", "clem", "https://github.com/org/clem.git")
+	if err == nil {
+		t.Fatal("expected error when token cleanup SSH fails")
+	}
+	if !strings.Contains(err.Error(), "token") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "cd ~/clem && git remote set-url origin https://github.com/org/clem.git"
+	if gotCmd != want {
+		t.Fatalf("fixRemote cmd = %q, want %q", gotCmd, want)
+	}
+}
+
+func TestStripCloneTokenFromRemote_SkipsEmptyURL(t *testing.T) {
+	old := remoteSSH
+	defer func() { remoteSSH = old }()
+	called := false
+	remoteSSH = func(host, cmd string) error {
+		called = true
+		return nil
+	}
+	if err := stripCloneTokenFromRemote("host", "clem", ""); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("should not SSH when cleanURL is empty")
+	}
+}
+
+func TestStripCloneTokenFromRemote_Success(t *testing.T) {
+	old := remoteSSH
+	defer func() { remoteSSH = old }()
+	remoteSSH = func(host, cmd string) error { return nil }
+	if err := stripCloneTokenFromRemote("host", "clem", "https://github.com/org/clem.git"); err != nil {
+		t.Fatal(err)
 	}
 }

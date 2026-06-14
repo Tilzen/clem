@@ -74,6 +74,10 @@ func SSH(host, command string) error {
 	return cmd.Run()
 }
 
+// remoteSSH is the SSH implementation used by remote provisioning helpers.
+// Tests may replace it to simulate failures.
+var remoteSSH = SSH
+
 // SSHT runs a command on the remote host with a TTY allocated (required for interactive prompts).
 func SSHT(host, command string) error {
 	cmd := exec.Command("ssh", "-t", "-o", "StrictHostKeyChecking=accept-new", host, command)
@@ -128,10 +132,8 @@ func Provision(host, ghToken string) error {
 	if err := SSH(host, cloneCmd); err != nil {
 		return fmt.Errorf("cloning repo: %w\nManual: ssh %s 'git clone https://oauth2:<token>@github.com/... ~/%s'", err, host, repoName)
 	}
-	// Strip token from saved remote URL so it doesn't persist in .git/config
-	if cleanURL != "" {
-		fixRemote := fmt.Sprintf("cd ~/%s && git remote set-url origin %s", repoName, cleanURL)
-		_ = SSH(host, fixRemote) // best-effort
+	if err := stripCloneTokenFromRemote(host, repoName, cleanURL); err != nil {
+		return err
 	}
 
 	fmt.Println("\n--- step 3/3: clem provision")
