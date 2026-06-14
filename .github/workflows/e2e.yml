@@ -452,7 +452,8 @@ jobs:
               vaults: [jira, github]
           EOF
           "$GITHUB_WORKSPACE/clem" vault init
-          "$GITHUB_WORKSPACE/clem" vault set jira JIRA_USERNAME=bot@acme.com JIRA_API_TOKEN=fakefortesting
+          "$GITHUB_WORKSPACE/clem" vault set jira JIRA_USERNAME=bot@acme.com
+          "$GITHUB_WORKSPACE/clem" vault set jira JIRA_API_TOKEN=fakefortesting
 
       - name: Run clem provision
         run: |

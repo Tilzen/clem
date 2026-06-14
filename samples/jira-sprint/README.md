@@ -36,7 +36,8 @@ clem init --backend jira
 
 ```bash
 clem vault init
-clem vault set jira JIRA_USERNAME="you@company.com" JIRA_API_TOKEN="..."
+clem vault set jira JIRA_USERNAME="you@company.com"
+clem vault set jira JIRA_API_TOKEN="..."
 clem vault set github GH_TOKEN="ghp_..."
 sudo clem provision
 sudo clem login

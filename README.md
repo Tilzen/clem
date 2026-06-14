@@ -375,7 +375,8 @@ agents:
 **Vault:**
 
 ```bash
-clem vault set jira JIRA_USERNAME="you@company.com" JIRA_API_TOKEN="..."
+clem vault set jira JIRA_USERNAME="you@company.com"
+clem vault set jira JIRA_API_TOKEN="..."
 ```
 
 Create an API token at https://id.atlassian.com/manage-profile/security/api-tokens

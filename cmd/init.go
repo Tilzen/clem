@@ -661,7 +661,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		fmt.Println("  1. Set jira.site, jira.project, and issue keys in clem.yaml")
 		fmt.Println("  2. Create labels clem-todo, clem-in-progress, clem-done, clem-blocked in Jira")
 		fmt.Println("  3. pipx install mcp-atlassian on the host")
-		fmt.Println("  4. clem vault set jira JIRA_USERNAME=... JIRA_API_TOKEN=...")
+		fmt.Println("  4. clem vault set jira JIRA_USERNAME=... && clem vault set jira JIRA_API_TOKEN=...")
 		fmt.Println("  5. Describe your project in CLAUDE.shared.md, then: clem vault init && clem provision")
 	} else {
 		fmt.Println("  1. Fill in channel IDs in clem.yaml")
