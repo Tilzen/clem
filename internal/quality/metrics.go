@@ -9,8 +9,14 @@ import (
 	"time"
 )
 
+func deferClose(f *os.File, err *error) {
+	if cerr := f.Close(); cerr != nil && *err == nil {
+		*err = cerr
+	}
+}
+
 // AppendJSONL records each gate result from a verdict run.
-func AppendJSONL(homeDir, agentKey string, v Verdict) error {
+func AppendJSONL(homeDir, agentKey string, v Verdict) (err error) {
 	path := JSONLPath(homeDir, agentKey)
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
@@ -19,7 +25,9 @@ func AppendJSONL(homeDir, agentKey string, v Verdict) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		deferClose(f, &err)
+	}()
 	for _, r := range v.Results {
 		entry := JSONLEntry{
 			TS:         v.Timestamp,
@@ -64,7 +72,7 @@ type GateStats struct {
 }
 
 // ReadAgentSummary parses the last verdict line-group from JSONL.
-func ReadAgentSummary(homeDir, agentKey string) (AgentSummary, error) {
+func ReadAgentSummary(homeDir, agentKey string) (sum AgentSummary, err error) {
 	path := JSONLPath(homeDir, agentKey)
 	f, err := os.Open(path)
 	if err != nil {
@@ -73,7 +81,7 @@ func ReadAgentSummary(homeDir, agentKey string) (AgentSummary, error) {
 		}
 		return AgentSummary{}, err
 	}
-	defer f.Close()
+	defer deferClose(f, &err)
 
 	var entries []JSONLEntry
 	sc := bufio.NewScanner(f)
@@ -98,7 +106,7 @@ func ReadAgentSummary(homeDir, agentKey string) (AgentSummary, error) {
 		lastRun = append([]JSONLEntry{entries[i]}, lastRun...)
 	}
 	lastTS := entries[len(entries)-1].TS
-	sum := AgentSummary{AgentKey: agentKey, LastTS: lastTS, LastAttempt: lastAttempt}
+	sum = AgentSummary{AgentKey: agentKey, LastTS: lastTS, LastAttempt: lastAttempt}
 	for _, e := range lastRun {
 		sum.GatesTotal++
 		if e.Pass {
@@ -126,11 +134,11 @@ func ReadAgentSummary(homeDir, agentKey string) (AgentSummary, error) {
 	if total > 0 {
 		sum.PassRate = float64(passes) / float64(total)
 	}
-	return sum, nil
+	return sum, err
 }
 
 // AggregateGateStats computes per-gate stats from JSONL.
-func AggregateGateStats(homeDir, agentKey string) ([]GateStats, error) {
+func AggregateGateStats(homeDir, agentKey string) (out []GateStats, err error) {
 	path := JSONLPath(homeDir, agentKey)
 	f, err := os.Open(path)
 	if err != nil {
@@ -139,7 +147,7 @@ func AggregateGateStats(homeDir, agentKey string) ([]GateStats, error) {
 		}
 		return nil, err
 	}
-	defer f.Close()
+	defer deferClose(f, &err)
 
 	byGate := map[string]*GateStats{}
 	sc := bufio.NewScanner(f)
@@ -159,7 +167,7 @@ func AggregateGateStats(homeDir, agentKey string) ([]GateStats, error) {
 		}
 		st.AvgMS += e.DurationMS
 	}
-	out := make([]GateStats, 0, len(byGate))
+	out = make([]GateStats, 0, len(byGate))
 	for _, st := range byGate {
 		if st.Runs > 0 {
 			st.PassRate = float64(st.Passes) / float64(st.Runs)
@@ -167,7 +175,7 @@ func AggregateGateStats(homeDir, agentKey string) ([]GateStats, error) {
 		}
 		out = append(out, *st)
 	}
-	return out, nil
+	return out, err
 }
 
 // LoadRuntimeConfig reads ~/.clem/quality.json.
@@ -202,7 +210,6 @@ func RunIteration(homeDir, workdir string, rc RuntimeConfig) (int, error) {
 		return 0, nil
 	}
 	taskID := CurrentTaskID(homeDir)
-	attempt := 1
 	state, err := ResetAttemptsIfTaskChanged(homeDir, taskID)
 	if err != nil {
 		return 1, err
@@ -219,7 +226,7 @@ func RunIteration(homeDir, workdir string, rc RuntimeConfig) (int, error) {
 		return 0, nil
 	}
 
-	attempt = state.Attempts + 1
+	attempt := state.Attempts + 1
 	verdict := RunSuite(workdir, rc.Gates, taskID, attempt)
 	if err := AppendJSONL(homeDir, rc.AgentKey, verdict); err != nil {
 		return 1, err

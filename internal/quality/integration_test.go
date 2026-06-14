@@ -339,7 +339,11 @@ func (h *harness) readJSONL(t *testing.T) []quality.JSONLEntry {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	t.Cleanup(func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("close jsonl: %v", err)
+		}
+	})
 	var out []quality.JSONLEntry
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
