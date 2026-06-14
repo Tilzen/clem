@@ -1,0 +1,39 @@
+# Sample clem.yaml — GitHub Issues as coordination backend.
+# Agents discover tasks via gh CLI polling (no Discord/Slack MCP).
+#
+# Prerequisites:
+#   - Create a task repo (github_repo below) with labels:
+#       clem:todo, clem:in-progress, clem:done, clem:blocked
+#   - Open dedicated issues for alerts and lessons; set their numbers below.
+#   - GH_TOKEN in each agent's vault (already required for PRs).
+
+project: sample
+
+coordination:
+  backend: github
+  github_repo: "${GITHUB_TASKS_REPO:-your-org/your-tasks}"
+  channels:
+    tasks:   "clem:todo"
+    alerts:  "${GITHUB_ALERTS_ISSUE:-12}"
+    lessons: "${GITHUB_LESSONS_ISSUE:-34}"
+
+operator:
+  github_logins: ["your-github-login"]
+
+agents:
+  lead:
+    name: "Clementine"
+    role: "Lead Software Engineer"
+    runtime: claude-code
+    model: "claude-sonnet-4-6"
+    iteration: 5m
+    web_terminal_port: 7681
+    web_terminal_bind: 0.0.0.0
+    vaults: [github]
+    prompt: >-
+      Act as {{agent.name}} per CLAUDE.local.md.
+      Each iteration: list open issues with label {{channels.tasks}} and no assignee
+      (`gh issue list --repo {{coordination.github_repo}} --label {{channels.tasks}}
+      --assignee none --state open`). Claim one via the race-safe protocol in
+      CLAUDE.shared.md, or continue in-progress work assigned to you.
+      Run bash: kill $PPID when all tiers are empty.

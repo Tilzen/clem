@@ -514,7 +514,7 @@ sudo clem provision && sudo clem login && sudo clem up"><svg class="ic" style="w
           </div>
           <div class="mono" style="text-align:center;font-size:18px;color:var(--clem-accent);margin:8px 0">↓</div>
           <div class="mono" style="background:var(--clem-ink-150);border:2px solid var(--clem-orange-400);border-radius:999px;padding:12px 22px;text-align:center;font-size:13px;color:var(--clem-ink-1000);max-width:440px;margin:0 auto">
-            Discord or Slack &nbsp;·&nbsp; <span style="color:var(--clem-ink-700)">#general #tasks #lessons</span>
+            Discord · Slack · GitHub Issues &nbsp;·&nbsp; <span style="color:var(--clem-ink-700)">#tasks · labels · gh</span>
           </div>
         </div>
 
@@ -531,7 +531,7 @@ sudo clem provision && sudo clem login && sudo clem up"><svg class="ic" style="w
 project: myteam            # OS user prefix → myteam-lead
 
 coordination:
-  backend: discord         # or: slack
+  backend: discord         # or: slack | github
   server_id: &quot;${DISCORD_SERVER_ID}&quot;
   channels:
     tasks:  &quot;${DISCORD_TASKS_CHANNEL}&quot;
@@ -562,7 +562,7 @@ agents:
 <span class="key">project</span>: myteam            <span class="cmt"># OS user prefix → myteam-lead</span>
 
 <span class="key">coordination</span>:
-  <span class="key">backend</span>: discord         <span class="cmt"># or: slack</span>
+  <span class="key">backend</span>: discord         <span class="cmt"># or: slack | github</span>
   <span class="key">server_id</span>: <span class="str">"${DISCORD_SERVER_ID}"</span>
   <span class="key">channels</span>:
     <span class="key">tasks</span>:  <span class="str">"${DISCORD_TASKS_CHANNEL}"</span>
@@ -634,8 +634,8 @@ agents:
       </div>
       <div class="card card-hover" style="padding:24px">
         <span style="display:inline-flex;color:var(--clem-accent-text);margin-bottom:14px"><svg class="ic" style="width:22px;height:22px"><use href="#i-discord"/></svg></span>
-        <h3 style="font-size:16px;font-weight:600;color:var(--clem-text-strong);margin:0 0 7px">Discord / Slack coordination</h3>
-        <p style="font-size:14px;line-height:1.6;color:var(--clem-text-muted);margin:0">Agents pick up tasks and report in a channel you already watch. Swap backends with one config knob.</p>
+        <h3 style="font-size:16px;font-weight:600;color:var(--clem-text-strong);margin:0 0 7px">Multi-backend coordination</h3>
+        <p style="font-size:14px;line-height:1.6;color:var(--clem-text-muted);margin:0">Discord, Slack, or GitHub Issues — agents pick up tasks where you already work. Swap backends with one config knob.</p>
       </div>
       <div class="card card-hover" style="padding:24px">
         <span style="display:inline-flex;color:var(--clem-accent-text);margin-bottom:14px"><svg class="ic" style="width:22px;height:22px"><use href="#i-cpu"/></svg></span>

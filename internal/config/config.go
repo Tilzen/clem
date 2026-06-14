@@ -77,6 +77,16 @@ var modelRe = regexp.MustCompile(`^[A-Za-z0-9._:/@-]+$`)
 // splits arguments — so only this conservative character set is allowed.
 var validBindRe = regexp.MustCompile(`^[0-9A-Za-z./:_-]+$`)
 
+// githubRepoRe matches owner/name for coordination.github_repo.
+var githubRepoRe = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?/[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$`)
+
+// issueNumberRe matches a GitHub issue number used in channels.alerts/lessons.
+var issueNumberRe = regexp.MustCompile(`^[1-9][0-9]*$`)
+
+// githubLabelRe matches a safe GitHub issue label for channels.tasks (injected
+// into generated bash). Rejects shell metacharacters; max 50 chars per GitHub.
+var githubLabelRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9:_-]{0,49}$`)
+
 // OperatorConfig identifies the humans who are trusted to issue instructions
 // to agents via Discord or GitHub. Provisioned agents use these IDs in the
 // generated prompt so no operator ID is hardcoded in clem source.
@@ -171,9 +181,19 @@ type Config struct {
 }
 
 type Coordination struct {
-	Backend  string            `yaml:"backend"`
-	ServerID string            `yaml:"server_id"`
-	Channels map[string]string `yaml:"channels"`
+	Backend string `yaml:"backend"`
+	// ServerID is the Discord guild or Slack workspace ID. Unused for GitHub.
+	ServerID string `yaml:"server_id"`
+	// GithubRepo is owner/name for the task-board repo when backend is github.
+	GithubRepo string            `yaml:"github_repo"`
+	Channels   map[string]string `yaml:"channels"`
+}
+
+func (c *Coordination) BackendOrDefault() string {
+	if c.Backend == "" {
+		return "discord"
+	}
+	return c.Backend
 }
 
 type AgentConfig struct {
@@ -514,6 +534,9 @@ func Load(path string) (*Config, error) {
 	if _, err := coordination.Known(cfg.Coordination.Backend); err != nil {
 		return nil, err
 	}
+	if err := cfg.Coordination.validate(); err != nil {
+		return nil, err
+	}
 	if err := cfg.Operator.validate(); err != nil {
 		return nil, err
 	}
@@ -637,6 +660,31 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+func (c *Coordination) validate() error {
+	switch c.BackendOrDefault() {
+	case "github":
+		if c.GithubRepo == "" {
+			return fmt.Errorf("coordination.github_repo is required when backend is github")
+		}
+		if !githubRepoRe.MatchString(c.GithubRepo) {
+			return fmt.Errorf("coordination.github_repo: %q is not a valid owner/name repo slug", c.GithubRepo)
+		}
+		for _, key := range []string{"alerts", "lessons"} {
+			if v := strings.TrimSpace(c.Channels[key]); v != "" && !issueNumberRe.MatchString(v) {
+				return fmt.Errorf("coordination.channels.%s: %q must be a GitHub issue number when backend is github", key, v)
+			}
+		}
+		v := strings.TrimSpace(c.Channels["tasks"])
+		if v == "" {
+			return fmt.Errorf("coordination.channels.tasks is required when backend is github (use a label such as clem:todo)")
+		}
+		if !githubLabelRe.MatchString(v) {
+			return fmt.Errorf("coordination.channels.tasks: %q is not a valid GitHub label (use letters, digits, :, _, - only)", v)
+		}
+	}
+	return nil
 }
 
 // validate checks that all discord_ids and github_logins are well-formed.

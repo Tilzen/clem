@@ -24,7 +24,7 @@
   <a href="https://discord.gg/pR4qeMH4u4">Discord</a>
 </p>
 
-`clem` runs a team of Claude Code agents 24/7 on any Linux host. Each agent is a separate OS user in a tmux session under systemd. Agents coordinate over Discord or Slack, pick up tasks, write code, and open PRs. A watchdog restarts anything that crashes. You write one clem.yaml; clem provisions the OS users and keeps them running.
+`clem` runs a team of Claude Code agents 24/7 on any Linux host. Each agent is a separate OS user in a tmux session under systemd. Agents coordinate over **Discord, Slack, or GitHub Issues**, pick up tasks, write code, and open PRs. A watchdog restarts anything that crashes. You write one clem.yaml; clem provisions the OS users and keeps them running.
 
 What sets it apart: **secrets and egress are contained at the OS layer, not by the agent's cooperation.** Each agent takes one disposition — a per-UID kernel firewall that forces all egress through an auditing proxy (a non-root agent can't disable a firewall it doesn't own), *or* a secret-zero broker that hands it only placeholders while a separate user injects the real credential on egress. Enforced by the kernel and a separate user, not by the agent. See the [security model](#security-model).
 
@@ -37,7 +37,7 @@ What sets it apart: **secrets and egress are contained at the OS layer, not by t
 | **Per-agent OS identity** | Each agent is its own Linux user - own home dir, own git identity, own GitHub PRs, own Discord/Slack bot. Crash boundaries are real. |
 | **Kernel egress containment** | Per-agent nftables UID firewall forces all traffic through a loopback proxy; a non-root agent can't disable a firewall it doesn't own. No in-process escape hatch. Opt-in `egress:` block. |
 | **Secret-zero brokering** | Brokered agents hold placeholders + a scoped inject-only token; real credentials live in a vault owned by a *separate* user and are injected on egress. `cat ~/.env` yields nothing usable for the brokered keys. |
-| **Multi-backend coordination** | Discord + Slack today via swappable `coordination.backend:` in `clem.yaml`. One config knob. |
+| **Multi-backend coordination** | Discord, Slack, or GitHub Issues via swappable `coordination.backend:` in `clem.yaml`. One config knob. |
 | **Multi-runtime** | `runtime: claude-code \| opencode`. Mix Anthropic cloud, Bedrock, Vertex, Ollama, OpenAI-compat - one surface. |
 | **Encrypted secrets** | Per-agent `.env` materialised from age/sops vaults at provision time. Never leave the host after. |
 | **Self-healing** | systemd + tmux per agent. Watchdog timer restarts dead or stalled sessions. Alerts fire only after repeated failures. |
@@ -54,14 +54,16 @@ What sets it apart: **secrets and egress are contained at the OS layer, not by t
 3. [Requirements](#requirements)
 4. [Install](#install)
 5. [Quickstart](#quickstart)
-6. [Discord setup](#discord-setup)
-7. [GitHub setup](#github-setup)
-8. [CLI reference](#cli-reference)
-9. [`clem.yaml` reference](#clemyaml-reference)
-10. [Secrets](#secrets)
-11. [Deploy to a VPS](#deploy-to-a-vps)
-12. [Troubleshooting](#troubleshooting)
-13. [License](#license)
+6. [Coordination backends](#coordination-backends)
+7. [Discord setup](#discord-setup)
+8. [GitHub coordination](#github-coordination)
+9. [GitHub credentials](#github-credentials)
+10. [CLI reference](#cli-reference)
+11. [`clem.yaml` reference](#clemyaml-reference)
+12. [Secrets](#secrets)
+13. [Deploy to a VPS](#deploy-to-a-vps)
+14. [Troubleshooting](#troubleshooting)
+15. [License](#license)
 
 ---
 
@@ -83,12 +85,11 @@ What sets it apart: **secrets and egress are contained at the OS layer, not by t
 │  │  restarts dead agents → #alerts     │             │
 │  └─────────────────────────────────────┘             │
 └───────────────────┬──────────────────────────────────┘
-                    │ coordination backend API
-          ┌─────────▼──────────┐
-          │  Discord or Slack  │
-          │  #general #tasks   │
-          │  #alerts #lessons  │
-          └────────────────────┘
+                    │ coordination backend
+          ┌─────────▼──────────────────────────┐
+          │  Discord · Slack · GitHub Issues   │
+          │  #tasks / threads · labels · gh    │
+          └────────────────────────────────────┘
 ```
 
 Each agent runs a loop: launch `claude` (or `opencode`), inject a prompt, wait for the session to finish (up to 2h hard cap), sleep the configured `iteration` duration, repeat. Secrets live encrypted in `secrets.sops.yaml` (age/sops); `clem provision` decrypts them into per-agent `.env` files on the host.
@@ -119,7 +120,7 @@ Both layers are **opt-in and default-off**; existing fleets are unaffected until
 
 ## Requirements
 
-**Host** - any Linux box with systemd (Ubuntu 24.04 recommended). Can be your laptop, a home server, a Pi, or a cloud VPS. Must have `tmux`, `git`, `python3`, `age`, `sops`, `yq`, and `curl`. Plus the MCP server for your chosen coordination backend - `mcp-discord` (Python) or `slack-mcp-server` (binary) - reachable via `$PATH`. `clem provision` installs the runtime CLI (Claude Code or opencode) per agent.
+**Host** - any Linux box with systemd (Ubuntu 24.04 recommended). Can be your laptop, a home server, a Pi, or a cloud VPS. Must have `tmux`, `git`, `python3`, `age`, `sops`, `yq`, and `curl`. Chat backends also need their MCP server on `$PATH` (`mcp-discord` for Discord, `slack-mcp-server` for Slack). The GitHub backend uses the `gh` CLI instead of a coordination MCP. `clem provision` installs the runtime CLI (Claude Code or opencode) per agent.
 
 **Local machine** - where you run `clem` commands (may be the same box as the host):
 - `go` 1.22+ (to build `clem`)
@@ -127,10 +128,10 @@ Both layers are **opt-in and default-off**; existing fleets are unaffected until
 - `gh` - GitHub CLI
 
 **Accounts:**
-- A coordination backend:
+- A coordination backend (pick one):
   - **Discord** - a private server + one bot token per agent, or
-  - **Slack** - a workspace + one Slack app per agent (bot user token `xoxb-…`)
-- A GitHub token per agent (fine-grained PAT or App)
+  - **Slack** - a workspace + one Slack app per agent (bot user token `xoxb-…`), or
+  - **GitHub Issues** - a task-board repo with `clem:*` labels + `GH_TOKEN` per agent (same token used for PRs)
 
 ---
 
@@ -167,22 +168,25 @@ sudo clem update
 
 Full local setup on one Linux box. If you want to provision on a separate remote host, see [Deploy to a VPS](#deploy-to-a-vps).
 
-**Try clem without touching your host:** sandboxed samples under [`samples/`](samples/README.md) - 
+**Try clem without touching your host:** sandboxed samples under [`samples/`](samples/README.md) -
 - [`ollama-nemotron-4b`](samples/ollama-nemotron-4b/README.md) - Discord + local NVIDIA Nemotron 3 Nano 4B (~2.8 GB)
 - [`slack-nemotron-4b`](samples/slack-nemotron-4b/README.md) - Slack + same local model
+- [`github-tasks`](samples/github-tasks/README.md) - GitHub Issues coordination via `gh` CLI (no chat MCP)
 
 ```bash
 # 1. new team repo (replace with your org)
 gh repo create my-team --private --clone && cd my-team
 
-# 2. scaffold config
+# 2. scaffold config (discord is default; use --backend github for GitHub Issues)
 clem init
+# clem init --backend github
 ```
 
 Edit `clem.yaml`:
 - Set `project:` (becomes OS user prefix, e.g. `myteam-lead`)
-- Pick `coordination.backend:` (`discord` or `slack`)
-- Paste your server/workspace ID and channel IDs - see [Discord setup](#discord-setup) below. Slack setup lives in [`samples/slack-nemotron-4b/README.md`](samples/slack-nemotron-4b/README.md).
+- Pick `coordination.backend:` (`discord`, `slack`, or `github`)
+- **Discord/Slack:** paste server/workspace ID and channel IDs - see [Discord setup](#discord-setup) and [`samples/slack-nemotron-4b/README.md`](samples/slack-nemotron-4b/README.md).
+- **GitHub:** set `github_repo` and channel mappings - see [GitHub coordination](#github-coordination).
 - Adjust agent `name`, `role`, `model`, `iteration` (Go duration: `30s`, `1m30s`, `2h`), `runtime`, `provider`
 
 Edit `CLAUDE.shared.md` - describe your project, fill in tiers T2-T4. Edit each `CLAUDE.<agentkey>.md` with per-agent specifics.
@@ -222,6 +226,18 @@ clem logs lead
 
 ---
 
+## Coordination backends
+
+| Backend | Task board | Claim | Alerts | Wake mechanism | MCP for coordination |
+|---------|------------|-------|--------|----------------|----------------------|
+| `discord` (default) | `#tasks` forum threads | Thread prefix `[TODO]` → `[IN PROGRESS]` | `#alerts` channel | `mcp-discord` gateway watcher | `mcp-discord` |
+| `slack` | `#tasks` top-level messages + threads | Reaction emoji on top message | `#alerts` channel | Agent polls on each iteration | `slack-mcp-server` |
+| `github` | Issues with `clem:*` labels | Self-assign via `gh issue edit` | Comment on alerts issue | `clem-github-watch` sidecar polls Issues API | None (`gh` CLI) |
+
+GitHub coordination closes the loop between tasks and PRs: work lives in Issues on a dedicated repo, output lands in PRs with `Closes #N`. Chat backends stay better for real-time operator conversation; GitHub is better when your source of truth is already on GitHub.
+
+---
+
 ## Discord setup
 
 Create a **private** Discord server (not a public one). Discord membership is the access control layer - agents act on instructions from anyone who can post in the channels.
@@ -250,9 +266,68 @@ Repeat per agent.
 
 ---
 
-## GitHub setup
+## GitHub coordination
 
-Each agent needs its own GitHub token so PRs and commits show distinct authors.
+Use GitHub Issues as the task board instead of Discord or Slack. Agents discover and claim work with the `gh` CLI; `clem provision` installs a per-agent **issue watcher sidecar** that polls `api.github.com` and wakes the tmux session when new claimable issues appear.
+
+**Prerequisites:**
+
+1. A task-board repository (can be separate from the code repos agents edit).
+2. Labels on that repo: `clem:todo`, `clem:in-progress`, `clem:done`, `clem:blocked`.
+3. Two meta-issues for watchdog alerts and post-mortems; note their issue numbers.
+4. `gh` CLI on the host and `GH_TOKEN` in each agent's vault (see [GitHub credentials](#github-credentials)).
+
+**Scaffold:**
+
+```bash
+clem init --backend github
+```
+
+**`clem.yaml` shape:**
+
+```yaml
+coordination:
+  backend: github
+  github_repo: "your-org/your-tasks"
+  channels:
+    tasks:   "clem:todo"    # label marking claimable work
+    alerts:  "12"           # issue number for watchdog / critical alerts
+    lessons: "34"           # issue number for post-mortems
+
+operator:
+  github_logins: ["your-github-login"]
+
+agents:
+  lead:
+    vaults: [github]
+    # ...
+```
+
+**Task board convention:**
+
+| Concept | GitHub primitive |
+|---------|------------------|
+| Task | Open issue with label `clem:todo` |
+| Status | Labels: `clem:todo` → `clem:in-progress` → `clem:done` or `clem:blocked` |
+| Claim | `gh issue edit N --add-assignee @me`, then re-read the issue to confirm you won the claim |
+| Updates | Comment on the issue |
+| Output | PR with `Closes #N` in the body |
+| Alerts | Comment on the alerts issue (`channels.alerts`) |
+
+**Provisioned services (GitHub backend):**
+
+- `clem-<project>-<agent>.service` - agent runner (unchanged)
+- `clem-github-watch-<project>-<agent>.service` - polls for unassigned `clem:todo` issues every 60s and sends `tmux send-keys` to wake the agent
+
+With `egress:` enabled, `api.github.com` is automatically added to the egress allowlist when `backend: github`. The watcher respects the same loopback proxy as the agent.
+
+Full walkthrough: [`samples/github-tasks/README.md`](samples/github-tasks/README.md).
+
+---
+
+## GitHub credentials
+
+Each agent needs its own GitHub token so PRs and commits show distinct authors. Required for all backends; with `backend: github` the same token also drives coordination.
 
 **Fine-grained PAT** (simplest, good for personal projects):
 
@@ -282,7 +357,8 @@ Repeat per agent.
 ```
 clem --version                     Print the installed version
 clem update                        Download and install the latest release
-clem init                          Scaffold clem.yaml + CLAUDE.{shared,<agent>}.md
+clem init [--backend discord|github]
+                                   Scaffold clem.yaml + CLAUDE.{shared,<agent>}.md
 clem vault init                    Generate age keypair + .sops.yaml
 clem vault set <vault> KEY=value   Set a secret in a vault
 clem vault get <vault> KEY         Read a decrypted secret
@@ -309,13 +385,14 @@ project: string             # OS user and service name prefix
 primary_milestone: string   # optional - referenced by CLAUDE.shared.md
 
 coordination:
-  backend: string           # discord (default) | slack
-  server_id: string         # Discord guild ID or Slack workspace ID
+  backend: string           # discord (default) | slack | github
+  server_id: string         # Discord guild ID or Slack workspace ID (unused for github)
+  github_repo: string       # owner/name of task-board repo (required when backend is github)
   channels:
-    general: string         # channel ID (C... for Slack, numeric for Discord)
-    tasks:   string         # task board channel (forum on Discord)
-    alerts:  string         # alerts channel
-    lessons: string         # lessons channel (forum on Discord)
+    general: string         # channel ID — Discord/Slack only
+    tasks:   string         # Discord/Slack: channel ID. GitHub: label (e.g. clem:todo)
+    alerts:  string         # Discord/Slack: channel ID. GitHub: issue number
+    lessons: string         # Discord/Slack: channel ID. GitHub: issue number
 
 agents:
   <agentkey>:               # lowercase; used in CLI + OS username
@@ -353,6 +430,7 @@ agents:
 Derived names:
 - OS user: `<project>-<agentkey>` (e.g. `myteam-lead`)
 - Systemd service: `clem-<project>-<agentkey>.service`
+- GitHub issue watcher: `clem-github-watch-<project>-<agentkey>.service` (github backend only)
 - Web terminal: `clem-ttyd-<project>-<agentkey>.service`
 
 ---
@@ -402,6 +480,9 @@ Inspect the service: `systemctl status clem-<project>-<agentkey>.service`. Commo
 **Agent not posting to Discord/Slack**  
 Check `clem logs <agent>`. The runner logs MCP server startup. If `mcp-discord` is missing, install with `pipx` (recommended) so its dependencies live in an isolated venv: `pipx install git+https://github.com/Bytelope/mcp-discord.git`. Avoid `pip install --break-system-packages` for Python MCP servers - the agent service runs with `ProtectHome=read-only`, so any later dependency drift (e.g. a system `pydantic-core` upgrade desyncing from the wheel an MCP server was built against) cannot be self-healed from inside the sandbox and the MCP will fail to boot. `pipx` venvs decouple each MCP from system Python state and survive `apt upgrade`. Confirm the bot was invited to the server. **`DISCORD_TOKEN` must be the raw token** (no `Bot ` prefix); `discord.py` adds it internally - pasting `"Bot …"` yields 401. For Slack: use a bot token (`xoxb-`), not a user token (`xoxp-`) - user tokens post as you, not the bot.
 
+**Agent not picking up GitHub tasks**  
+Confirm `coordination.backend: github`, `github_repo`, and `channels.tasks` are set. Check the watcher: `systemctl status clem-github-watch-<project>-<agent>.service` and `~/.claude/<agent>-github-watch.log` under the agent's home. The watcher needs `GH_TOKEN` in the agent's `.env`. Open issues must have the tasks label and no assignee. With `egress:` enabled, ensure `api.github.com` is reachable through the proxy (automatically allowed when `backend: github`).
+
 **`clem login` keeps prompting daily / `clem status` flips to `EXPIRED` every 8 hours**  
 You probably ran a clem older than v0.8.4. The Claude Max access token genuinely lasts only ~8 hours, but Claude Code refreshes it automatically using the long-lived refresh token stored alongside it. Pre-0.8.4 `clem status` displayed the *access* token expiry and pre-0.8.4 `NeedsLogin` gated on a 7-day window - so it always reported "expired" and trained operators to log in daily for nothing. Upgrade to v0.8.4+; status now shows `auto-refresh` whenever a refresh token is present, and only reports `missing` when manual `clem login` is actually required.
 
@@ -409,7 +490,7 @@ You probably ran a clem older than v0.8.4. The Claude Max access token genuinely
 Re-run `sudo clem login <agent>`. The refresh token itself is long-lived; you only need to re-login if the credentials file is wiped or the refresh token is server-side revoked.
 
 **Agent wakes up and does nothing**  
-Open the task forum - threads must exist with `[TODO]` status. Agents only work what's on the board.
+Discord: open the task forum - threads must exist with `[TODO]` status. Slack: top-level messages need the ⏳ reaction. GitHub: open issues must carry the `clem:todo` label. Agents only work what's on the board.
 
 **Provisioning the same host twice**  
 Safe. `useradd` is idempotent; systemd units are overwritten; `.env` is regenerated from current vaults. Existing Claude OAuth tokens are preserved.

@@ -232,6 +232,33 @@ func TestGenerateScript_NoAgentVaultCheckWhenEnvBackend(t *testing.T) {
 	}
 }
 
+func TestGenerateScript_GitHubBackendAlertCurl(t *testing.T) {
+	cfg := baseCfg()
+	cfg.Coordination.Backend = "github"
+	cfg.Coordination.GithubRepo = "owner/repo"
+	cfg.Coordination.Channels["alerts"] = "42"
+	s := GenerateScript(cfg)
+	for _, want := range []string{
+		`if [ -n "$GH_TOKEN" ] && [ -n "42" ]; then`,
+		`api.github.com/repos/owner/repo/issues/42/comments`,
+		`-H "Authorization: Bearer $GH_TOKEN"`,
+		`-d "{\"body\":\"$safe_msg\"}"`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("github-backend script missing %q\n---\n%s", want, s)
+		}
+	}
+	for _, deny := range []string{
+		`DISCORD_TOKEN`,
+		`discord.com/api/v10`,
+		`slack.com/api/chat.postMessage`,
+	} {
+		if strings.Contains(s, deny) {
+			t.Errorf("github-backend script must not contain %q\n---\n%s", deny, s)
+		}
+	}
+}
+
 func TestGenerateScript_TranscriptPrune(t *testing.T) {
 	cfg := baseCfg()
 	out := GenerateScript(cfg)

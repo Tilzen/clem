@@ -65,6 +65,23 @@ func TestGeneratePipelockConfig_DefaultDomains(t *testing.T) {
 	if !strings.Contains(out, "*.anthropic.com") || !strings.Contains(out, "github.com") {
 		t.Errorf("expected default domains, got:\n%s", out)
 	}
+	if strings.Contains(out, "api.github.com") {
+		t.Errorf("api.github.com should not be in default domains without github backend, got:\n%s", out)
+	}
+}
+
+func TestGeneratePipelockConfig_GitHubBackendAddsAPIDomain(t *testing.T) {
+	cfg := testCfg()
+	cfg.Egress.Domains = nil
+	cfg.Coordination = config.Coordination{
+		Backend:    "github",
+		GithubRepo: "org/repo",
+		Channels:   map[string]string{"tasks": "clem:todo"},
+	}
+	out := GeneratePipelockConfig(cfg)
+	if !strings.Contains(out, `api.github.com`) {
+		t.Errorf("expected api.github.com for github coordination, got:\n%s", out)
+	}
 }
 
 func TestGeneratePipelockService(t *testing.T) {

@@ -57,6 +57,7 @@ export CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1
 # built against. Pre-0.9.5 hardcoded /usr/local/bin and broke every time
 # system Python state drifted, requiring jahwag to re-edit .mcp.json every
 # iteration because the runner overwrites it.
+_backend = '{{.CoordinationBackend}}'
 python3 -c "
 import json, os
 def _mcp_bin(name):
@@ -67,7 +68,8 @@ cfg = {'mcpServers': {}}
 # Discord bot. When channel IDs are configured the MCP server also runs a
 # gateway watcher that pushes one debounced notification per burst into this
 # agent's tmux session — see mcp-discord's CLEM_TMUX_TARGET docs.
-if os.environ.get('DISCORD_TOKEN'):
+# Skipped when coordination backend is github (agents use gh CLI instead).
+if _backend != 'github' and os.environ.get('DISCORD_TOKEN'):
     _discord_env = {'DISCORD_TOKEN': os.environ['DISCORD_TOKEN']}
     _watch = '{{.WatchChannelIDs}}'
     if _watch:
@@ -85,7 +87,7 @@ if os.environ.get('DISCORD_TOKEN'):
 # slack-mcp-server is a Go binary (not Python) so the pipx fallback does
 # not apply; we still resolve it through _mcp_bin for symmetry / future-
 # proofing in case the upstream ships a Python version.
-if os.environ.get('SLACK_MCP_XOXP_TOKEN'):
+if _backend != 'github' and os.environ.get('SLACK_MCP_XOXP_TOKEN'):
     slack_args = ['--transport', 'stdio']
     if os.environ.get('SLACK_MCP_ENABLED_TOOLS'):
         slack_args += ['--enabled-tools', os.environ['SLACK_MCP_ENABLED_TOOLS']]
@@ -252,6 +254,7 @@ tail -500 "$LOGFILE" > "$LOGFILE.tmp" 2>/dev/null && mv "$LOGFILE.tmp" "$LOGFILE
 # Write opencode.json with Ollama provider + discord-bot MCP (if token is set).
 # MCP binary paths come from _mcp_bin (pipx-isolated venv preferred over system
 # pip install — see the claude-code runner template above for the rationale).
+_backend = '{{.CoordinationBackend}}'
 python3 -c "
 import json, os
 def _mcp_bin(name):
@@ -271,7 +274,7 @@ if os.environ.get('ANTHROPIC_MODEL'):
         'options': {'baseURL': base_url},
         'models': {os.environ['ANTHROPIC_MODEL']: {}},
     }
-if os.environ.get('DISCORD_TOKEN'):
+if _backend != 'github' and os.environ.get('DISCORD_TOKEN'):
     _discord_env = {'DISCORD_TOKEN': os.environ['DISCORD_TOKEN']}
     _watch = '{{.WatchChannelIDs}}'
     if _watch:
@@ -283,7 +286,7 @@ if os.environ.get('DISCORD_TOKEN'):
         'enabled': True,
         'environment': _discord_env,
     }
-if os.environ.get('SLACK_MCP_XOXP_TOKEN'):
+if _backend != 'github' and os.environ.get('SLACK_MCP_XOXP_TOKEN'):
     slack_cmd = [_mcp_bin('slack-mcp-server'), '--transport', 'stdio']
     if os.environ.get('SLACK_MCP_ENABLED_TOOLS'):
         slack_cmd += ['--enabled-tools', os.environ['SLACK_MCP_ENABLED_TOOLS']]
@@ -362,6 +365,7 @@ After=network.target
 # start, so without a Wants here a "systemctl start" of the agent leaves the
 # terminal dead until provision re-enables it.
 Wants=clem-ttyd-{{.Project}}-{{.AgentKey}}.service
+{{.GitHubWatchUnitDeps}}
 {{.ProxyUnitDeps}}
 [Service]
 Type=forking
@@ -445,6 +449,11 @@ type RunnerParams struct {
 	// SidecarServers is a Python/JSON list literal of [toolName, port] pairs for
 	// the privileged MCP sidecars this agent subscribes to. "[]" when none.
 	SidecarServers string
+	// CoordinationBackend is the coordination.backend value (discord, slack, github).
+	CoordinationBackend string
+	// GitHubWatchUnitDeps is the Wants= block tying the agent to the GitHub
+	// issue watcher sidecar when coordination.backend is github.
+	GitHubWatchUnitDeps string
 	// SkillsSyncCmd is the shell snippet invoked at the top of every iteration
 	// to refresh the agent's ~/.claude/skills/ symlinks from the team skills
 	// repo. Empty when cfg.SkillsRepo is unset, in which case no sync runs.
@@ -497,7 +506,12 @@ func Generate(cfg *config.Config, agentKey string) string {
 	alertChannel := cfg.Coordination.Channels["alerts"]
 	backend, _ := coordination.Known(cfg.Coordination.Backend) // validated at load time
 	alertMsg := fmt.Sprintf(`⚠️ %s: CLAUDE.local.md is ${SIZE} bytes (>${MAX_CLAUDE_MD_BYTES}). Trim it to reduce token waste.`, escapeForAlert(ac.Name))
-	alertCurl := fmt.Sprintf(`[ -n "$%s" ] && %s`, backend.TokenEnvVar, fmt.Sprintf(backend.AlertTemplate, alertChannel, alertMsg))
+	alertCurlBody := coordination.RenderAlert(backend, coordination.AlertParams{
+		Repo:    cfg.Coordination.GithubRepo,
+		Channel: alertChannel,
+		Message: alertMsg,
+	})
+	alertCurl := coordination.AlertCurlGuard(backend, alertChannel, alertCurlBody)
 
 	subagentExport := ""
 	if ac.SubagentModel != "" {
@@ -528,19 +542,21 @@ func Generate(cfg *config.Config, agentKey string) string {
 		Prompt:         strings.ReplaceAll(promptText, "'", `'\''`),
 		OSUser:         cfg.OSUsername(agentKey),
 		HomeDir:        fmt.Sprintf("/home/%s", cfg.OSUsername(agentKey)),
-		SleepActive:    iterSec,
+		SleepActive: iterSec,
 		// Night sleep defaults to the active value; iteration_night overrides.
 		// History: a hardcoded 2x night doubler was removed on the belief the
 		// prompt-cache TTL was 5 min. Subscription Claude Code actually gets
 		// the 1h TTL, refreshed on access (verified against session-log usage
 		// fields, 2026-06-13), so night intervals up to ~45m still start warm.
-		SleepNight:      nightSec,
-		AlertChannel:    alertChannel,
-		AlertCurl:       alertCurl,
-		WatchChannelIDs: discordWatchChannels(cfg),
-		ProxyExport:     proxyExportBlock(cfg, agentKey),
-		SidecarServers:  sidecarServersLiteral(cfg, agentKey),
-		SkillsSyncCmd:   skillsSyncCmd,
+		SleepNight:          nightSec,
+		AlertChannel:        alertChannel,
+		AlertCurl:           alertCurl,
+		WatchChannelIDs:     watchChannelIDs(cfg),
+		CoordinationBackend: cfg.Coordination.BackendOrDefault(),
+		GitHubWatchUnitDeps: githubWatchUnitDeps(cfg, agentKey),
+		ProxyExport:         proxyExportBlock(cfg, agentKey),
+		SidecarServers:      sidecarServersLiteral(cfg, agentKey),
+		SkillsSyncCmd:       skillsSyncCmd,
 	}
 	switch ac.RuntimeKind() {
 	case "opencode":
@@ -650,6 +666,7 @@ func GenerateService(cfg *config.Config, agentKey string) (string, error) {
 		HardeningDirectives: buildHardeningDirectives(homeDir, cfg.Project),
 		ResourceDirectives:  ac.ResourceLimits.Directives(),
 		ProxyUnitDeps:       proxyDeps,
+		GitHubWatchUnitDeps: githubWatchUnitDeps(cfg, agentKey),
 	}
 	return renderTemplate(serviceTemplate, p), nil
 }
@@ -697,6 +714,8 @@ func renderTemplate(tmpl string, p RunnerParams) string {
 		"{{.ProxyExport}}", p.ProxyExport,
 		"{{.ProxyUnitDeps}}", p.ProxyUnitDeps,
 		"{{.SidecarServers}}", p.SidecarServers,
+		"{{.CoordinationBackend}}", p.CoordinationBackend,
+		"{{.GitHubWatchUnitDeps}}", p.GitHubWatchUnitDeps,
 		"{{.SkillsSyncCmd}}", p.SkillsSyncCmd,
 	)
 	return r.Replace(tmpl)
@@ -718,12 +737,11 @@ func sidecarServersLiteral(cfg *config.Config, agentKey string) string {
 	return "[" + strings.Join(parts, ", ") + "]"
 }
 
-// discordWatchChannels returns a deterministic comma-separated list of
-// configured Discord channel IDs for the gateway watcher to observe.
-// Sorted by channel name (the map key) so renders are stable across
-// Go map-iteration orderings, which keeps generated runner.sh diffs
-// minimal between provisions.
-func discordWatchChannels(cfg *config.Config) string {
+// watchChannelIDs returns coordination-backend-specific watcher configuration
+// injected into the MCP generator. Discord: comma-separated channel IDs for
+// mcp-discord's gateway watcher. GitHub and Slack: empty (GitHub uses a
+// separate systemd sidecar; Slack has no push watcher yet).
+func watchChannelIDs(cfg *config.Config) string {
 	if cfg == nil {
 		return ""
 	}
@@ -733,16 +751,30 @@ func discordWatchChannels(cfg *config.Config) string {
 	if backend.Name != "discord" {
 		return ""
 	}
-	names := make([]string, 0, len(cfg.Coordination.Channels))
-	for name := range cfg.Coordination.Channels {
+	return sortedChannelIDs(cfg.Coordination.Channels)
+}
+
+// sortedChannelIDs returns a deterministic comma-separated list of configured
+// channel IDs. Sorted by channel name so renders are stable across Go map
+// iteration orderings.
+func sortedChannelIDs(channels map[string]string) string {
+	names := make([]string, 0, len(channels))
+	for name := range channels {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	ids := make([]string, 0, len(names))
 	for _, name := range names {
-		if id := strings.TrimSpace(cfg.Coordination.Channels[name]); id != "" {
+		if id := strings.TrimSpace(channels[name]); id != "" {
 			ids = append(ids, id)
 		}
 	}
 	return strings.Join(ids, ",")
+}
+
+func githubWatchUnitDeps(cfg *config.Config, agentKey string) string {
+	if cfg == nil || !cfg.UsesGitHubCoordination() {
+		return ""
+	}
+	return fmt.Sprintf("Wants=%s\n", cfg.GitHubWatchServiceName(agentKey))
 }

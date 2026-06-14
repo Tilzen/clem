@@ -1948,6 +1948,163 @@ agents:
 	}
 }
 
+func TestLoad_GitHubBackendValid(t *testing.T) {
+	raw := []byte(`
+project: gh-team
+coordination:
+  backend: github
+  github_repo: acme/clem-tasks
+  channels:
+    tasks: "clem:todo"
+    alerts: "12"
+    lessons: "34"
+agents:
+  lead:
+    name: Lead
+    model: claude-sonnet-4-6
+    iteration: 5m
+    prompt: go
+`)
+	path := writeYAML(t, string(raw))
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Coordination.GithubRepo != "acme/clem-tasks" {
+		t.Fatalf("GithubRepo = %q", cfg.Coordination.GithubRepo)
+	}
+}
+
+func TestLoad_GitHubBackendMissingRepo(t *testing.T) {
+	raw := []byte(`
+project: gh-team
+coordination:
+  backend: github
+  channels:
+    tasks: "clem:todo"
+    alerts: "12"
+agents:
+  lead:
+    name: Lead
+    model: claude-sonnet-4-6
+    iteration: 5m
+    prompt: go
+`)
+	_, err := Load(writeYAML(t, string(raw)))
+	if err == nil || !strings.Contains(err.Error(), "github_repo") {
+		t.Fatalf("expected github_repo error, got %v", err)
+	}
+}
+
+func TestLoad_GitHubBackendInvalidTasksLabel(t *testing.T) {
+	raw := []byte(`
+project: gh-team
+coordination:
+  backend: github
+  github_repo: org/repo
+  channels:
+    tasks: 'clem:todo"; rm -rf /; "'
+    alerts: "12"
+agents:
+  lead:
+    name: Lead
+    model: claude-sonnet-4-6
+    iteration: 5m
+    prompt: go
+`)
+	_, err := Load(writeYAML(t, string(raw)))
+	if err == nil || !strings.Contains(err.Error(), "channels.tasks") {
+		t.Fatalf("expected tasks label error, got %v", err)
+	}
+}
+
+func TestEgressDomainsOrDefault_GitHubBackendAddsAPI(t *testing.T) {
+	cfg := &Config{
+		Coordination: Coordination{Backend: "github", GithubRepo: "org/repo", Channels: map[string]string{"tasks": "clem:todo"}},
+	}
+	domains := cfg.EgressDomainsOrDefault()
+	found := false
+	for _, d := range domains {
+		if d == "api.github.com" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected api.github.com for github backend, got %v", domains)
+	}
+}
+
+func TestEgressDomainsOrDefault_DiscordBackendOmitsAPI(t *testing.T) {
+	cfg := &Config{Coordination: Coordination{Backend: "discord"}}
+	domains := cfg.EgressDomainsOrDefault()
+	for _, d := range domains {
+		if d == "api.github.com" {
+			t.Fatalf("discord backend should not add api.github.com, got %v", domains)
+		}
+	}
+}
+
+func TestLoad_GitHubBackendInvalidAlertsIssue(t *testing.T) {
+	raw := []byte(`
+project: gh-team
+coordination:
+  backend: github
+  github_repo: org/repo
+  channels:
+    tasks: "clem:todo"
+    alerts: "not-a-number"
+agents:
+  lead:
+    name: Lead
+    model: claude-sonnet-4-6
+    iteration: 5m
+    prompt: go
+`)
+	_, err := Load(writeYAML(t, string(raw)))
+	if err == nil || !strings.Contains(err.Error(), "channels.alerts") {
+		t.Fatalf("expected alerts issue number error, got %v", err)
+	}
+}
+
+func TestLoad_UnknownCoordinationBackend(t *testing.T) {
+	raw := []byte(`
+project: x
+coordination:
+  backend: gitlab
+agents:
+  lead:
+    name: L
+    model: m
+    iteration: 1m
+    prompt: p
+`)
+	_, err := Load(writeYAML(t, string(raw)))
+	if err == nil || !strings.Contains(err.Error(), "gitlab") {
+		t.Fatalf("expected unknown backend error, got %v", err)
+	}
+}
+
+func TestLoad_GitHubBackendInvalidRepoSlug(t *testing.T) {
+	raw := []byte(`
+project: gh-team
+coordination:
+  backend: github
+  github_repo: owner/../evil
+  channels:
+    tasks: "clem:todo"
+agents:
+  lead:
+    name: Lead
+    model: claude-sonnet-4-6
+    iteration: 5m
+    prompt: go
+`)
+	_, err := Load(writeYAML(t, string(raw)))
+	if err == nil || !strings.Contains(err.Error(), "github_repo") {
+		t.Fatalf("expected github_repo slug error, got %v", err)
+	}
+}
+
 func TestLoad_SkillsRepoAccepted(t *testing.T) {
 	cases := map[string]string{
 		"github https": "https://github.com/example/myteam-skills",

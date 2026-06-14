@@ -32,6 +32,17 @@ func (c *Config) TtydServiceName(agentKey string) string {
 	return fmt.Sprintf("clem-ttyd-%s-%s.service", c.Project, agentKey)
 }
 
+// GitHubWatchServiceName returns the systemd service name for the GitHub issue
+// watcher sidecar that wakes the agent's tmux session on new tasks.
+func (c *Config) GitHubWatchServiceName(agentKey string) string {
+	return fmt.Sprintf("clem-github-watch-%s-%s.service", c.Project, agentKey)
+}
+
+// UsesGitHubCoordination reports whether coordination uses GitHub Issues.
+func (c *Config) UsesGitHubCoordination() bool {
+	return c.Coordination.BackendOrDefault() == "github"
+}
+
 // PipelockServiceName returns the systemd service name for the egress proxy.
 func (c *Config) PipelockServiceName() string {
 	return fmt.Sprintf("clem-pipelock-%s.service", c.Project)
