@@ -674,6 +674,9 @@ func Load(path string) (*Config, error) {
 		if err := ac.validateExtensions(key); err != nil {
 			return nil, err
 		}
+		if err := validateAgentVaults(key, ac.Vaults); err != nil {
+			return nil, err
+		}
 		cfg.Agents[key] = ac
 	}
 	if err := cfg.validateVaultServices(); err != nil {
@@ -683,6 +686,15 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+func validateAgentVaults(agentKey string, vaults []string) error {
+	for _, name := range vaults {
+		if !validName.MatchString(name) {
+			return fmt.Errorf("agent %s: vault name %q must match %s", agentKey, name, validName.String())
+		}
+	}
+	return nil
 }
 
 func (c *Coordination) validate() error {

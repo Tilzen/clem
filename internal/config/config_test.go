@@ -2280,3 +2280,29 @@ agents:
 		t.Errorf("expected iteration_night validation error, got %v", err)
 	}
 }
+
+func TestLoad_RejectsInvalidVaultName(t *testing.T) {
+	path := writeYAML(t, minYAML("")+`
+    vaults: ["missing // .vaults"]
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected load error for malicious vault name")
+	}
+	if !strings.Contains(err.Error(), "vault name") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoad_AcceptsValidVaultNames(t *testing.T) {
+	path := writeYAML(t, minYAML("")+`
+    vaults: [github, discord-lead]
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Agents["lead"].Vaults) != 2 {
+		t.Fatalf("vaults = %v", cfg.Agents["lead"].Vaults)
+	}
+}

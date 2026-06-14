@@ -288,3 +288,75 @@ func TestFlatSecrets(t *testing.T) {
 		}
 	}
 }
+
+func TestBug122_YqInjectionEnumeratesAllVaults(t *testing.T) {
+	if _, err := exec.LookPath("yq"); err != nil {
+		t.Skip("yq not on PATH")
+	}
+	decrypted := `vaults:
+  admin:
+    ROOT: topsecret
+  lead:
+    TOKEN: ok
+`
+	// When embedded in DecryptForAgent's fmt.Sprintf, this yq alternative operator
+	// falls back to the entire .vaults subtree when "missing" does not exist.
+	malicious := `missing // .vaults`
+	expr := ".vaults." + malicious + " | keys"
+	out, err := runYQ(expr, decrypted)
+	if err != nil {
+		t.Fatalf("runYQ: %v", err)
+	}
+	if !strings.Contains(out, "admin") || !strings.Contains(out, "lead") {
+		t.Fatalf("malicious vault name should enumerate all vaults, got:\n%s", out)
+	}
+
+	exprLead := ".vaults.lead | keys"
+	outLead, err := runYQ(exprLead, decrypted)
+	if err != nil {
+		t.Fatalf("runYQ lead: %v", err)
+	}
+	if strings.Contains(outLead, "admin") {
+		t.Fatalf("valid vault name should not expose admin vault, got:\n%s", outLead)
+	}
+}
+
+func TestValidateVaultName_RejectsInjection(t *testing.T) {
+	for _, name := range []string{
+		"missing // .vaults",
+		"shared // .vaults",
+		"UPPER",
+		"has_underscore",
+		"has.dot",
+		"",
+	} {
+		if err := ValidateVaultName(name); err == nil {
+			t.Errorf("ValidateVaultName(%q) expected error", name)
+		}
+	}
+	if err := ValidateVaultName("github"); err != nil {
+		t.Errorf("ValidateVaultName(github): %v", err)
+	}
+}
+
+func TestDecryptForAgent_RejectsInvalidVaultName(t *testing.T) {
+	_, err := DecryptForAgent("lead", []string{"missing // .vaults"})
+	if err == nil {
+		t.Fatal("expected error for malicious vault name")
+	}
+	if !strings.Contains(err.Error(), "vault name") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSet_RejectsInvalidVaultName(t *testing.T) {
+	cleanup := setupVaultDir(t)
+	defer cleanup()
+	err := Set("bad // vault", "KEY=value")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "vault name") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
