@@ -6,11 +6,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
 const defaultAgeKeysPath = ".config/sops/age/keys.txt"
 const secretsFile = "secrets.sops.yaml"
+
+// validSecretKey matches POSIX shell variable names used in export lines.
+var validSecretKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func validateSecretKey(key string) error {
+	if !validSecretKey.MatchString(key) {
+		return fmt.Errorf("key %q is not a valid env var name (must match [A-Za-z_][A-Za-z0-9_]*)", key)
+	}
+	return nil
+}
 
 // Init generates an age keypair and saves it to ~/.config/sops/age/keys.txt.
 // Prints the public key and instructions for .sops.yaml.
@@ -84,6 +95,9 @@ func Set(vaultName, keyval string) error {
 		return fmt.Errorf("invalid format, expected KEY=value, got: %s", keyval)
 	}
 	key, value := parts[0], parts[1]
+	if err := validateSecretKey(key); err != nil {
+		return err
+	}
 
 	if err := ensureSopsBin(); err != nil {
 		return err
@@ -123,6 +137,11 @@ func Delete(vaultName, key string) error {
 	if err := ValidateVaultName(vaultName); err != nil {
 		return err
 	}
+	if key != "" {
+		if err := validateSecretKey(key); err != nil {
+			return err
+		}
+	}
 	if err := ensureSops(); err != nil {
 		return err
 	}
@@ -153,6 +172,9 @@ func Delete(vaultName, key string) error {
 // Get retrieves a secret key for a vault from secrets.sops.yaml.
 func Get(vaultName, key string) error {
 	if err := ValidateVaultName(vaultName); err != nil {
+		return err
+	}
+	if err := validateSecretKey(key); err != nil {
 		return err
 	}
 	if err := ensureSops(); err != nil {
