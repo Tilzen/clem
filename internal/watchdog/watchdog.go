@@ -308,18 +308,10 @@ func GenerateScript(cfg *config.Config) string {
 
 	alertChannel := cfg.Coordination.Channels["alerts"]
 	backend, _ := coordination.Known(cfg.Coordination.Backend) // validated at load time
-	alertRepo := cfg.Coordination.GithubRepo
-	if cfg.UsesJiraCoordination() {
-		alertRepo = cfg.Coordination.Jira.Site
-	}
 	// $msg is the bash local set by send_alert; RenderAlert expands it at
 	// runtime so the curl body matches the per-backend wire format.
-	alertCurlBody := coordination.RenderAlert(backend, coordination.AlertParams{
-		Repo:    alertRepo,
-		Channel: alertChannel,
-		Message: "$safe_msg",
-	})
-	alertCurl := coordination.AlertCurlGuard(backend, alertChannel, alertCurlBody)
+	alertCurlBody := coordination.RenderAlert(backend, cfg.CoordinationAlertParams("$safe_msg"))
+	alertCurl := coordination.AlertCurlGuard(backend, alertChannel, alertCurlBody, cfg.JiraAlertsMode())
 
 	var checks strings.Builder
 	for _, key := range keys {

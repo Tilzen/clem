@@ -85,7 +85,7 @@ func TestGitHub_TokenEnvVar(t *testing.T) {
 
 func TestAlertCurlGuard_GitHubSkipsWhenAlertsUnset(t *testing.T) {
 	b, _ := Known("github")
-	got := AlertCurlGuard(b, "", `curl example`)
+	got := AlertCurlGuard(b, "", `curl example`, "")
 	if got != "true" {
 		t.Fatalf("expected no-op when alerts unset, got %q", got)
 	}
@@ -93,7 +93,7 @@ func TestAlertCurlGuard_GitHubSkipsWhenAlertsUnset(t *testing.T) {
 
 func TestAlertCurlGuard_GitHubRequiresTokenAndIssue(t *testing.T) {
 	b, _ := Known("github")
-	got := AlertCurlGuard(b, "42", `curl example`)
+	got := AlertCurlGuard(b, "42", `curl example`, "")
 	for _, want := range []string{`[ -n "$GH_TOKEN" ]`, `[ -n "42" ]`, `curl example`} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("AlertCurlGuard missing %q:\n%s", want, got)
@@ -119,9 +119,50 @@ func TestRenderAlert_Jira(t *testing.T) {
 	}
 }
 
+func TestRenderAlert_JiraIssueMode(t *testing.T) {
+	b, _ := Known("jira")
+	got := RenderAlert(b, AlertParams{
+		Repo:            "acme.atlassian.net",
+		Message:         "disk full",
+		JiraProject:     "ENG",
+		JiraAlertsMode:  "issue",
+		JiraAlertsLabel: "clem-incident",
+		JiraIssueType:   "Incident",
+	})
+	for _, want := range []string{
+		`https://acme.atlassian.net/rest/api/3/issue`,
+		`project`,
+		`ENG`,
+		`disk full`,
+		`Incident`,
+		`clem-incident`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("RenderAlert jira issue mode missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestAlertCurlGuard_JiraIssueModeSkipsIssueKey(t *testing.T) {
+	b, _ := Known("jira")
+	got := AlertCurlGuard(b, "", `curl example`, "issue")
+	for _, want := range []string{
+		`[ -n "$JIRA_API_TOKEN" ]`,
+		`[ -n "$JIRA_USERNAME" ]`,
+		`curl example`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("AlertCurlGuard jira issue mode missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, `[ -n "" ]`) {
+		t.Fatalf("issue mode should not require channels.alerts:\n%s", got)
+	}
+}
+
 func TestAlertCurlGuard_JiraSkipsWhenAlertsUnset(t *testing.T) {
 	b, _ := Known("jira")
-	got := AlertCurlGuard(b, "", `curl example`)
+	got := AlertCurlGuard(b, "", `curl example`, "comment")
 	if got != "true" {
 		t.Fatalf("expected no-op when alerts unset, got %q", got)
 	}
@@ -129,7 +170,7 @@ func TestAlertCurlGuard_JiraSkipsWhenAlertsUnset(t *testing.T) {
 
 func TestAlertCurlGuard_JiraRequiresTokenUserAndIssue(t *testing.T) {
 	b, _ := Known("jira")
-	got := AlertCurlGuard(b, "OPS-1", `curl example`)
+	got := AlertCurlGuard(b, "OPS-1", `curl example`, "comment")
 	for _, want := range []string{
 		`[ -n "$JIRA_API_TOKEN" ]`,
 		`[ -n "$JIRA_USERNAME" ]`,

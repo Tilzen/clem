@@ -10,20 +10,19 @@ and wakes the tmux session when new claimable issues appear.
 - Jira Cloud site (Atlassian Cloud)
 - `pipx install mcp-atlassian` on the host
 - Project with labels: `clem-todo`, `clem-in-progress`, `clem-done`, `clem-blocked`
-- Two meta-issues for alerts and lessons (note their issue keys)
 - Vault secrets per agent: `JIRA_USERNAME`, `JIRA_API_TOKEN`, and `GH_TOKEN` for PRs
 
 ## Setup
 
 1. Create labels on your Jira project.
-2. Open dedicated issues for alerts and lessons.
+2. Choose alert/lessons strategy in `clem.yaml` (see configurable modes below).
 3. Export env vars (or edit `clem.yaml`):
 
 ```bash
 export JIRA_SITE=your-org.atlassian.net
 export JIRA_PROJECT=ENG
-export JIRA_ALERTS_ISSUE=OPS-12
-export JIRA_LESSONS_ISSUE=OPS-34
+export JIRA_ALERTS_ISSUE=OPS-12      # when alerts_mode: comment
+export JIRA_LESSONS_ISSUE=OPS-34     # when lessons_mode: issue
 ```
 
 4. Initialize agent docs:
@@ -44,18 +43,36 @@ sudo clem login
 sudo clem up
 ```
 
+## Configurable modes
+
+| Field | Default | Options |
+|-------|---------|---------|
+| `jira.alerts_mode` | `comment` | `comment` posts to a fixed issue; `issue` creates a new incident ticket per alert |
+| `jira.status_mode` | `labels` | `labels` only; `transitions` moves workflow columns; `both` |
+| `jira.lessons_mode` | `issue` | `issue` comments on a meta-issue; `confluence` appends to a Confluence page |
+
+Example — incident tickets instead of a shared alerts issue:
+
+```yaml
+coordination:
+  jira:
+    alerts_mode: issue
+    alerts_label: clem-incident
+    alerts_issue_type: Incident
+```
+
 ## Task board convention
 
 | Concept | Jira primitive |
 |---------|----------------|
 | Task | Issue with label `clem-todo` |
 | Sprint scope | Optional `jira.jql_extra: "AND sprint in openSprints()"` |
-| Status | Labels: clem-todo → clem-in-progress → clem-done or clem-blocked |
+| Status | Configurable via `jira.status_mode` (labels by default) |
 | Claim | Assign yourself via jira-mcp, then re-read the issue |
 | Updates | Comment on the issue |
 | Output | PR in git + link issue key in comment |
-| Alerts | Comment on alerts issue (`channels.alerts`) |
-| Lessons | Comment on lessons issue (`channels.lessons`) |
+| Alerts | `comment` on alerts issue, or `issue` creates incident tickets |
+| Lessons | `issue` comments, or `confluence` page append |
 
 ## How it differs from other backends
 
@@ -63,7 +80,7 @@ sudo clem up
 |--------|---------------|----------------|--------------|
 | Task discovery | MCP + watcher | `gh` CLI + issue watcher | jira-mcp + JQL watcher |
 | Claim | Thread / emoji | Self-assign + re-read | Assign + re-read |
-| Alerts | Channel post | Issue comment | Issue comment (REST) |
+| Alerts | Channel post | Issue comment | Comment or new issue (configurable) |
 | MCP | discord / slack | None | mcp-atlassian |
 | Extra service | — | clem-github-watch | clem-jira-watch |
 

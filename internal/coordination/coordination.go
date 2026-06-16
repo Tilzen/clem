@@ -21,13 +21,21 @@ type Backend struct {
 // AlertParams carries the per-config values that expand AlertTemplate.
 type AlertParams struct {
 	// Channel is a Discord channel ID, Slack channel ID, GitHub issue number,
-	// or Jira issue key (e.g. OPS-12).
+	// or Jira issue key (e.g. OPS-12). Unused for Jira when AlertsMode is issue.
 	Channel string
 	// Repo is the GitHub owner/name when Name == "github", or the Jira site
 	// hostname (e.g. acme.atlassian.net) when Name == "jira".
 	Repo string
 	// Message is the alert body (may be a bash variable like $safe_msg).
 	Message string
+	// JiraProject is the Jira project key when Name == "jira".
+	JiraProject string
+	// JiraAlertsMode is comment or issue (Jira only).
+	JiraAlertsMode string
+	// JiraAlertsLabel labels new issues when JiraAlertsMode is issue.
+	JiraAlertsLabel string
+	// JiraIssueType is the issue type name for created alert issues.
+	JiraIssueType string
 }
 
 // RenderAlert expands a backend's AlertTemplate with the given parameters.
@@ -35,7 +43,13 @@ type AlertParams struct {
 // (repo, issue number, message).
 func RenderAlert(b Backend, p AlertParams) string {
 	switch b.Name {
-	case "github", "jira":
+	case "jira":
+		if p.JiraAlertsMode == "issue" {
+			return fmt.Sprintf(jiraAlertCreateTemplate,
+				p.Repo, p.JiraProject, p.Message, p.JiraIssueType, p.JiraAlertsLabel)
+		}
+		return fmt.Sprintf(b.AlertTemplate, p.Repo, p.Channel, p.Message)
+	case "github":
 		return fmt.Sprintf(b.AlertTemplate, p.Repo, p.Channel, p.Message)
 	default:
 		return fmt.Sprintf(b.AlertTemplate, p.Channel, p.Message)
@@ -44,12 +58,19 @@ func RenderAlert(b Backend, p AlertParams) string {
 
 // AlertCurlGuard wraps an alert curl body with token (and GitHub issue) guards.
 // Skips the curl when backend is github and channels.alerts is unset.
-func AlertCurlGuard(b Backend, channel, body string) string {
+// For Jira, jiraAlertsMode may be "issue" (create per alert) or "comment"
+// (default; requires a channels.alerts issue key).
+func AlertCurlGuard(b Backend, channel, body, jiraAlertsMode string) string {
 	if b.Name == "github" && strings.TrimSpace(channel) == "" {
 		return "true"
 	}
-	if b.Name == "jira" && strings.TrimSpace(channel) == "" {
-		return "true"
+	if b.Name == "jira" {
+		if jiraAlertsMode == "issue" {
+			return `[ -n "$JIRA_API_TOKEN" ] && [ -n "$JIRA_USERNAME" ] && ` + body
+		}
+		if strings.TrimSpace(channel) == "" {
+			return "true"
+		}
 	}
 	guard := fmt.Sprintf(`[ -n "$%s" ]`, b.TokenEnvVar)
 	if b.Name == "github" || b.Name == "jira" {
@@ -132,8 +153,15 @@ var jira = Backend{
         -H "Accept: application/json" \
         -d "{\"body\":{\"type\":\"doc\",\"version\":1,\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"%s\"}]}]}}" > /dev/null 2>&1`,
 	TaskBoardNotes: `Task board lives in the configured Jira project (jira.project). Each task =
-one issue with the label from channels.tasks (e.g. clem-todo). Status via labels:
-clem-todo → clem-in-progress → clem-done or clem-blocked. Discover work with
-jira_search (JQL) or the jira-mcp tools; claim by assigning yourself, then
-re-read the issue to confirm you won the claim. Report via issue comments.`,
+one issue with the label from channels.tasks (e.g. clem-todo). Status tracking
+is configurable via jira.status_mode (labels, transitions, or both). Discover
+work with jira_search (JQL) or jira-mcp; claim by assigning yourself, then
+re-read the issue. Alerts: jira.alerts_mode comment (issue key) or issue
+(per-incident tickets). Lessons: jira.lessons_mode issue or confluence.`,
 }
+
+// jiraAlertCreateTemplate posts a new issue per alert (alerts_mode: issue).
+var jiraAlertCreateTemplate = `curl -s -X POST "https://%s/rest/api/3/issue" \
+        -u "$JIRA_USERNAME:$JIRA_API_TOKEN" -H "Content-Type: application/json" \
+        -H "Accept: application/json" \
+        -d "{\"fields\":{\"project\":{\"key\":\"%s\"},\"summary\":\"%s\",\"issuetype\":{\"name\":\"%s\"},\"labels\":[\"%s\"]}}" > /dev/null 2>&1`

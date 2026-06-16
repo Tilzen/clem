@@ -18,6 +18,9 @@
 //	{{coordination.github_repo}}  cfg.Coordination.GithubRepo
 //	{{coordination.jira.site}}    cfg.Coordination.Jira.Site
 //	{{coordination.jira.project}} cfg.Coordination.Jira.Project
+//	{{coordination.jira.alert_protocol}}   rendered from jira.alerts_mode
+//	{{coordination.jira.status_protocol}}   rendered from jira.status_mode
+//	{{coordination.jira.lessons_protocol}} rendered from jira.lessons_mode
 package agentdoc
 
 import (
@@ -103,9 +106,13 @@ func Substitute(content string, cfg *config.Config, agentKey string) string {
 		pairs = append(pairs, "{{coordination.github_repo}}", cfg.Coordination.GithubRepo)
 	}
 	if cfg.UsesJiraCoordination() {
+		j := cfg.Coordination.Jira
 		pairs = append(pairs,
-			"{{coordination.jira.site}}", cfg.Coordination.Jira.Site,
-			"{{coordination.jira.project}}", cfg.Coordination.Jira.Project,
+			"{{coordination.jira.site}}", j.Site,
+			"{{coordination.jira.project}}", j.Project,
+			"{{coordination.jira.alert_protocol}}", j.AlertProtocolDoc(cfg.Coordination.Channels["alerts"]),
+			"{{coordination.jira.status_protocol}}", j.StatusProtocolDoc(),
+			"{{coordination.jira.lessons_protocol}}", j.LessonsProtocolDoc(cfg.Coordination.Channels["lessons"]),
 		)
 	}
 	for name, id := range cfg.Coordination.Channels {

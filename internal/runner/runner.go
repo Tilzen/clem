@@ -529,17 +529,9 @@ func Generate(cfg *config.Config, agentKey string) string {
 
 	alertChannel := cfg.Coordination.Channels["alerts"]
 	backend, _ := coordination.Known(cfg.Coordination.Backend) // validated at load time
-	alertRepo := cfg.Coordination.GithubRepo
-	if cfg.UsesJiraCoordination() {
-		alertRepo = cfg.Coordination.Jira.Site
-	}
 	alertMsg := fmt.Sprintf(`⚠️ %s: CLAUDE.local.md is ${SIZE} bytes (>${MAX_CLAUDE_MD_BYTES}). Trim it to reduce token waste.`, escapeForAlert(ac.Name))
-	alertCurlBody := coordination.RenderAlert(backend, coordination.AlertParams{
-		Repo:    alertRepo,
-		Channel: alertChannel,
-		Message: alertMsg,
-	})
-	alertCurl := coordination.AlertCurlGuard(backend, alertChannel, alertCurlBody)
+	alertCurlBody := coordination.RenderAlert(backend, cfg.CoordinationAlertParams(alertMsg))
+	alertCurl := coordination.AlertCurlGuard(backend, alertChannel, alertCurlBody, cfg.JiraAlertsMode())
 
 	subagentExport := ""
 	if ac.SubagentModel != "" {

@@ -237,7 +237,7 @@ clem logs lead
 | `discord` (default) | `#tasks` forum threads | Thread prefix `[TODO]` → `[IN PROGRESS]` | `#alerts` channel | `mcp-discord` gateway watcher | `mcp-discord` |
 | `slack` | `#tasks` top-level messages + threads | Reaction emoji on top message | `#alerts` channel | Agent polls on each iteration | `slack-mcp-server` |
 | `github` | Issues with `clem:*` labels | Self-assign via `gh issue edit` | Comment on alerts issue | `clem-github-watch` sidecar polls Issues API | None (`gh` CLI) |
-| `jira` | Issues with `clem-*` labels | Assign + re-read via jira-mcp | Comment on alerts issue | `clem-jira-watch` sidecar polls JQL | `mcp-atlassian` |
+| `jira` | Issues with `clem-*` labels | Assign + re-read via jira-mcp | Configurable: comment on alerts issue or create incident tickets | `clem-jira-watch` sidecar polls JQL | `mcp-atlassian` |
 
 GitHub coordination closes the loop between tasks and PRs: work lives in Issues on a dedicated repo, output lands in PRs with `Closes #N`. Jira coordination targets teams whose sprint board already lives in Jira Software — agents use jira-mcp for interaction and a JQL watcher for wake. Chat backends stay better for real-time operator conversation.
 
@@ -340,9 +340,17 @@ REST API and wakes the tmux session when new claimable issues appear.
 
 1. Jira Cloud site (e.g. `your-org.atlassian.net`).
 2. Labels on your project: `clem-todo`, `clem-in-progress`, `clem-done`, `clem-blocked`.
-3. Two meta-issues for alerts and post-mortems; note their issue keys (e.g. `OPS-12`).
+3. Optional meta-issues for alerts/lessons (when using `alerts_mode: comment` / `lessons_mode: issue`).
 4. `pipx install mcp-atlassian` on the host.
 5. `JIRA_USERNAME` + `JIRA_API_TOKEN` in each agent's vault (see below).
+
+**Configurable Jira behaviour** (all optional — sensible defaults match label-only workflows):
+
+| Field | Default | Purpose |
+|-------|---------|---------|
+| `jira.alerts_mode` | `comment` | `comment` = watchdog posts to `channels.alerts` issue; `issue` = create a new ticket per alert (label `clem-incident` by default) |
+| `jira.status_mode` | `labels` | `labels` = swap `clem-*` labels only; `transitions` = move workflow columns via jira-mcp; `both` = labels + transitions |
+| `jira.lessons_mode` | `issue` | `issue` = comment on `channels.lessons`; `confluence` = append to `lessons_page_id` via mcp-atlassian Confluence tools |
 
 **Scaffold:**
 
@@ -359,10 +367,13 @@ coordination:
     site: "your-org.atlassian.net"
     project: "ENG"
     jql_extra: "AND sprint in openSprints()"   # optional sprint scope
+    alerts_mode: comment          # comment | issue
+    status_mode: labels           # labels | transitions | both
+    lessons_mode: issue           # issue | confluence
   channels:
     tasks:   "clem-todo"
-    alerts:  "OPS-12"
-    lessons: "OPS-34"
+    alerts:  "OPS-12"             # when alerts_mode: comment
+    lessons: "OPS-34"             # when lessons_mode: issue
 
 operator:
   jira_accounts: ["you@company.com"]
@@ -460,11 +471,17 @@ coordination:
     site: string            # Atlassian Cloud hostname (required when backend is jira)
     project: string         # Jira project key (e.g. ENG)
     jql_extra: string       # optional JQL fragment (e.g. AND sprint in openSprints())
+    alerts_mode: string     # comment (default) | issue
+    alerts_label: string    # label on created alert issues (default clem-incident)
+    alerts_issue_type: string  # Jira issue type for alerts_mode: issue (default Task)
+    status_mode: string     # labels (default) | transitions | both
+    lessons_mode: string    # issue (default) | confluence
+    lessons_page_id: string # Confluence page ID when lessons_mode: confluence
   channels:
     general: string         # channel ID — Discord/Slack only
     tasks:   string         # Discord/Slack: channel ID. GitHub/Jira: label
-    alerts:  string         # Discord/Slack: channel ID. GitHub: issue number. Jira: issue key
-    lessons: string         # Discord/Slack: channel ID. GitHub: issue number. Jira: issue key
+    alerts:  string         # Discord/Slack: channel ID. GitHub: issue number. Jira: issue key (comment mode)
+    lessons: string         # Discord/Slack: channel ID. GitHub: issue number. Jira: issue key (issue mode)
 
 agents:
   <agentkey>:               # lowercase; used in CLI + OS username

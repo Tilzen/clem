@@ -860,6 +860,42 @@ func TestGenerate_JiraBackendAlertCurl(t *testing.T) {
 	}
 }
 
+func TestGenerate_JiraBackendAlertCurlIssueMode(t *testing.T) {
+	cfg := &config.Config{
+		Project: "test",
+		Coordination: config.Coordination{
+			Backend: "jira",
+			Jira: config.JiraCoordination{
+				Site:       "acme.atlassian.net",
+				Project:    "ENG",
+				AlertsMode: "issue",
+			},
+			Channels: map[string]string{"tasks": "clem-todo"},
+		},
+		Agents: map[string]config.AgentConfig{
+			"worker": {
+				Name:      "Worker",
+				Model:     "claude-opus-4-7",
+				Iteration: "1m",
+				Prompt:    "do the thing",
+			},
+		},
+	}
+	out := Generate(cfg, "worker")
+	for _, want := range []string{
+		`acme.atlassian.net/rest/api/3/issue`,
+		`ENG`,
+		`clem-incident`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("jira issue-mode runner missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, `/comment`) {
+		t.Fatalf("issue mode should not post comments:\n%s", out)
+	}
+}
+
 func TestGenerate_JiraBackendRegistersMCP(t *testing.T) {
 	cfg := &config.Config{
 		Project: "test",

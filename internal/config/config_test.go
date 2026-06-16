@@ -2256,6 +2256,79 @@ agents:
 	}
 }
 
+func TestLoad_JiraBackendConfluenceLessonsRequiresPageID(t *testing.T) {
+	raw := []byte(`
+project: jira-team
+coordination:
+  backend: jira
+  jira:
+    site: acme.atlassian.net
+    project: ENG
+    lessons_mode: confluence
+  channels:
+    tasks: "clem-todo"
+agents:
+  lead:
+    name: Lead
+    model: claude-sonnet-4-6
+    iteration: 5m
+    prompt: go
+`)
+	_, err := Load(writeYAML(t, string(raw)))
+	if err == nil || !strings.Contains(err.Error(), "lessons_page_id") {
+		t.Fatalf("expected lessons_page_id error, got %v", err)
+	}
+}
+
+func TestLoad_JiraBackendAlertsIssueMode(t *testing.T) {
+	raw := []byte(`
+project: jira-team
+coordination:
+  backend: jira
+  jira:
+    site: acme.atlassian.net
+    project: ENG
+    alerts_mode: issue
+    alerts_label: ops-incident
+    alerts_issue_type: Incident
+  channels:
+    tasks: "clem-todo"
+agents:
+  lead:
+    name: Lead
+    model: claude-sonnet-4-6
+    iteration: 5m
+    prompt: go
+`)
+	cfg, err := Load(writeYAML(t, string(raw)))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Coordination.Jira.AlertsModeOrDefault() != "issue" {
+		t.Fatalf("AlertsMode = %q", cfg.Coordination.Jira.AlertsMode)
+	}
+}
+
+func TestJiraCoordination_ProtocolDocs(t *testing.T) {
+	j := JiraCoordination{
+		Site:          "acme.atlassian.net",
+		Project:       "ENG",
+		AlertsMode:    "issue",
+		StatusMode:    "transitions",
+		LessonsMode:   "confluence",
+		LessonsPageID: "12345",
+	}
+	if !strings.Contains(j.AlertProtocolDoc(""), "jira_create_issue") {
+		t.Fatalf("alert doc: %s", j.AlertProtocolDoc(""))
+	}
+	if !strings.Contains(j.StatusProtocolDoc(), "jira_transition_issue") {
+		t.Fatalf("status doc: %s", j.StatusProtocolDoc())
+	}
+	if !strings.Contains(j.LessonsProtocolDoc(""), "12345") {
+		t.Fatalf("lessons doc: %s", j.LessonsProtocolDoc(""))
+	}
+}
+
 func TestLoad_SkillsRepoAccepted(t *testing.T) {
 	cases := map[string]string{
 		"github https": "https://github.com/example/myteam-skills",

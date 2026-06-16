@@ -104,6 +104,12 @@ var jiraJQLOverrideRe = regexp.MustCompile(`^[a-zA-Z0-9 "'().,:_-]{0,200}$`)
 // jiraAccountRe matches an Atlassian account email for operator trust lists.
 var jiraAccountRe = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
 
+// jiraIssueTypeRe matches a Jira issue type name (e.g. Task, Incident, Bug).
+var jiraIssueTypeRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9 _-]{0,49}$`)
+
+// confluencePageIDRe matches a numeric Confluence page ID.
+var confluencePageIDRe = regexp.MustCompile(`^[1-9][0-9]*$`)
+
 // OperatorConfig identifies the humans who are trusted to issue instructions
 // to agents via Discord, GitHub, or Jira. Provisioned agents use these IDs in
 // the generated prompt so no operator ID is hardcoded in clem source.
@@ -207,17 +213,6 @@ type Coordination struct {
 	GithubRepo string            `yaml:"github_repo"`
 	Jira       JiraCoordination  `yaml:"jira"`
 	Channels   map[string]string `yaml:"channels"`
-}
-
-// JiraCoordination holds Jira-specific coordination settings when backend is jira.
-type JiraCoordination struct {
-	// Site is the Atlassian Cloud hostname (e.g. acme.atlassian.net), no scheme.
-	Site string `yaml:"site"`
-	// Project is the Jira project key (e.g. ENG).
-	Project string `yaml:"project"`
-	// JQLExtra is an optional fragment appended to the task-board JQL in the
-	// issue watcher, e.g. `AND sprint in openSprints()` for sprint-scoped work.
-	JQLExtra string `yaml:"jql_extra"`
 }
 
 func (c *Coordination) BackendOrDefault() string {
@@ -752,9 +747,49 @@ func (c *Coordination) validate() error {
 		if extra := strings.TrimSpace(c.Jira.JQLExtra); extra != "" && !jiraJQLOverrideRe.MatchString(extra) {
 			return fmt.Errorf("coordination.jira.jql_extra: %q contains unsupported characters", extra)
 		}
-		for _, key := range []string{"alerts", "lessons"} {
-			if v := strings.TrimSpace(c.Channels[key]); v != "" && !jiraIssueKeyRe.MatchString(v) {
-				return fmt.Errorf("coordination.channels.%s: %q must be a Jira issue key when backend is jira", key, v)
+		switch c.Jira.AlertsModeOrDefault() {
+		case "comment", "issue":
+			// valid
+		default:
+			return fmt.Errorf("coordination.jira.alerts_mode must be comment or issue, got %q", c.Jira.AlertsMode)
+		}
+		switch c.Jira.StatusModeOrDefault() {
+		case "labels", "transitions", "both":
+			// valid
+		default:
+			return fmt.Errorf("coordination.jira.status_mode must be labels, transitions, or both, got %q", c.Jira.StatusMode)
+		}
+		switch c.Jira.LessonsModeOrDefault() {
+		case "issue", "confluence":
+			// valid
+		default:
+			return fmt.Errorf("coordination.jira.lessons_mode must be issue or confluence, got %q", c.Jira.LessonsMode)
+		}
+		if label := strings.TrimSpace(c.Jira.AlertsLabel); label != "" && !githubLabelRe.MatchString(label) {
+			return fmt.Errorf("coordination.jira.alerts_label: %q is not a valid Jira label", label)
+		}
+		if it := strings.TrimSpace(c.Jira.AlertsIssueType); it != "" && !jiraIssueTypeRe.MatchString(it) {
+			return fmt.Errorf("coordination.jira.alerts_issue_type: %q is not a valid issue type name", it)
+		}
+		if c.Jira.AlertsModeOrDefault() == "comment" {
+			for _, key := range []string{"alerts", "lessons"} {
+				if v := strings.TrimSpace(c.Channels[key]); v != "" && !jiraIssueKeyRe.MatchString(v) {
+					return fmt.Errorf("coordination.channels.%s: %q must be a Jira issue key when backend is jira", key, v)
+				}
+			}
+		} else if v := strings.TrimSpace(c.Channels["alerts"]); v != "" && !jiraIssueKeyRe.MatchString(v) {
+			return fmt.Errorf("coordination.channels.alerts: %q must be a Jira issue key (ignored when alerts_mode is issue)", v)
+		}
+		if c.Jira.LessonsModeOrDefault() == "issue" {
+			if v := strings.TrimSpace(c.Channels["lessons"]); v != "" && !jiraIssueKeyRe.MatchString(v) {
+				return fmt.Errorf("coordination.channels.lessons: %q must be a Jira issue key when lessons_mode is issue", v)
+			}
+		} else {
+			if c.Jira.LessonsPageID == "" {
+				return fmt.Errorf("coordination.jira.lessons_page_id is required when lessons_mode is confluence")
+			}
+			if !confluencePageIDRe.MatchString(c.Jira.LessonsPageID) {
+				return fmt.Errorf("coordination.jira.lessons_page_id: %q must be a numeric Confluence page ID", c.Jira.LessonsPageID)
 			}
 		}
 		v := strings.TrimSpace(c.Channels["tasks"])
