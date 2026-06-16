@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -113,5 +114,53 @@ func TestAgeKeyPath_UnderHomeConfig(t *testing.T) {
 	p := AgeKeyPath()
 	if !strings.HasSuffix(p, ".config/sops/age/keys.txt") {
 		t.Errorf("AgeKeyPath = %q, want ~/.config/sops/age/keys.txt", p)
+	}
+}
+
+func TestBug118_MaliciousRepoNameInjectsShellCommand(t *testing.T) {
+	malicious := `legit; touch /tmp/pwned #`
+	// Same pattern as Provision/Login — repoName is unquoted in SSH shell.
+	cmd := fmt.Sprintf("cd ~/%s && clem provision", malicious)
+	if !strings.Contains(cmd, "; touch") {
+		t.Fatalf("expected injectable command, got %q", cmd)
+	}
+	if err := validateRepoName(malicious); err == nil {
+		t.Fatal("validateRepoName should reject shell metacharacters")
+	}
+}
+
+func TestRepoName_MaliciousRemoteRejectedByValidation(t *testing.T) {
+	chdirTempGitRepo(t, "git@github.com:org/legit;touch.git")
+	name, err := RepoName()
+	if err != nil {
+		t.Fatalf("RepoName: %v", err)
+	}
+	if name != "legit;touch" {
+		t.Fatalf("RepoName = %q, want %q", name, "legit;touch")
+	}
+	if _, err := ValidatedRepoName(); err == nil {
+		t.Fatal("ValidatedRepoName should reject malicious repo name from origin URL")
+	}
+}
+
+func TestValidateRepoName_AcceptsNormalNames(t *testing.T) {
+	for _, name := range []string{"clem", "my-team", "my_team", "repo.v2"} {
+		if err := validateRepoName(name); err != nil {
+			t.Errorf("validateRepoName(%q): %v", name, err)
+		}
+	}
+}
+
+func TestValidateRepoName_RejectsUnsafe(t *testing.T) {
+	for _, name := range []string{
+		`legit; touch /tmp/pwned #`,
+		"$(id)",
+		"repo name",
+		"../etc",
+		"",
+	} {
+		if err := validateRepoName(name); err == nil {
+			t.Errorf("validateRepoName(%q) expected error", name)
+		}
 	}
 }
