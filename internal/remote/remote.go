@@ -106,7 +106,7 @@ func AgeKeyPath() string {
 // 2. clone repo
 // 3. clem provision
 func Provision(host, ghToken string) error {
-	repoName, err := RepoName()
+	repoName, err := ValidatedRepoName()
 	if err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func Provision(host, ghToken string) error {
 
 // Login runs clem login on the remote host with a TTY for interactive OAuth.
 func Login(host string) error {
-	repoName, err := RepoName()
+	repoName, err := ValidatedRepoName()
 	if err != nil {
 		return err
 	}
