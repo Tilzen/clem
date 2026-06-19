@@ -603,6 +603,26 @@ agents:
 	}
 }
 
+func TestLoad_SubagentModelRejectsShellMetacharacters(t *testing.T) {
+	cases := []string{
+		`"$(touch /tmp/pwned)"`,
+		"$(reboot)",
+		`"model with spaces"`,
+		`"model'quote"`,
+	}
+	for _, val := range cases {
+		path := writeYAML(t, subagentYAML(val))
+		_, err := Load(path)
+		if err == nil {
+			t.Errorf("Load accepted subagent_model %s, want error", val)
+			continue
+		}
+		if !strings.Contains(err.Error(), "subagent_model") {
+			t.Errorf("error should name subagent_model, got: %v", err)
+		}
+	}
+}
+
 func TestLoad_GitIdentityParsed(t *testing.T) {
 	path := writeYAML(t, `
 project: myteam

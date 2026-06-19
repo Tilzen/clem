@@ -679,6 +679,9 @@ func Load(path string) (*Config, error) {
 			// span multiple sops vaults — no first-vault constraint.
 		}
 		ac.normalizeSubagentModel()
+		if ac.SubagentModel != "" && !modelRe.MatchString(ac.SubagentModel) {
+			return nil, fmt.Errorf("agent %s: subagent_model %q must match %s (rendered into a bash export in runner.sh)", key, ac.SubagentModel, modelRe.String())
+		}
 		if err := ac.ResourceLimits.validate(key); err != nil {
 			return nil, err
 		}
