@@ -768,9 +768,9 @@ func WriteWranglerConfig(username, homeDir string, secrets map[string]string) er
 		return fmt.Errorf("creating wrangler config dir: %w", err)
 	}
 
-	configContent := fmt.Sprintf(`oauth_token = "%s"
-expiration_time = "%s"
-refresh_token = "%s"
+	configContent := fmt.Sprintf(`oauth_token = '%s'
+expiration_time = '%s'
+refresh_token = '%s'
 scopes = [ "account:read", "user:read", "workers:write", "workers_kv:write", "workers_routes:write", "workers_scripts:write", "workers_tail:read", "d1:write", "pages:write", "zone:read", "ssl_certs:write", "ai:write", "queues:write", "pipelines:write", "secrets_store:write", "containers:write", "cloudchamber:write", "connectivity:admin", "offline_access" ]
 `, oauth, expiration, refresh)
 
