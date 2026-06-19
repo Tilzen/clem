@@ -699,6 +699,65 @@ agents:
 	}
 }
 
+func TestLoad_GitNameRejectsControlCharacters(t *testing.T) {
+	cases := map[string]string{
+		"newline":         "Ada\n[commit]\n\tgpgsign = false",
+		"carriage return": "Ada\rEvil",
+		"tab":             "Ada\tEvil",
+		"control char":    "Ada\x01Evil",
+	}
+	for name, gitName := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := writeYAML(t, `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+operator:
+  discord_ids: ["277434478803156993"]
+agents:
+  lead:
+    name: "Ada"
+    model: "claude-sonnet-4-6"
+    git_name: `+fmt.Sprintf("%q", gitName)+`
+`)
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("Load accepted git_name %q, want error", gitName)
+			}
+			if !strings.Contains(err.Error(), "git_name") {
+				t.Errorf("error should name git_name, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoad_GitNameAllowsSpaces(t *testing.T) {
+	path := writeYAML(t, `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+operator:
+  discord_ids: ["277434478803156993"]
+agents:
+  lead:
+    name: "Ada"
+    model: "claude-sonnet-4-6"
+    git_name: "Ada Lovelace"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load rejected git_name with space: %v", err)
+	}
+	ac := cfg.Agents["lead"]
+	if ac.GitName != "Ada Lovelace" {
+		t.Errorf("GitName = %q, want %q", ac.GitName, "Ada Lovelace")
+	}
+}
+
 func TestLoad_AgentNameRoleRejectControlCharacters(t *testing.T) {
 	cases := map[string]struct {
 		field string

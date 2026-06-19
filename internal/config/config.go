@@ -47,6 +47,14 @@ var snowflakeRe = regexp.MustCompile(`^[0-9]{17,19}$`)
 // parser treats them as line or field breaks.
 var gitEmailInvalid = regexp.MustCompile(`[\s\x00-\x1f\x7f]`)
 
+// gitNameInvalid matches ASCII control characters — the characters that corrupt
+// ~/.gitconfig, where git_name lands as the value of "name = <value>" under
+// the [user] section. A newline injects a new line, allowing a crafted name
+// to add git config sections (e.g. "[commit]\n\tgpgsign = false" disables
+// commit signing). Spaces are permitted because display names like
+// "Ada Lovelace" are the common case.
+var gitNameInvalid = regexp.MustCompile(`[\x00-\x1f\x7f]`)
+
 // agentNameInvalid matches ASCII control characters — the characters that
 // corrupt the line-delimited sinks name and role are written into. The worst
 // sink is systemd unit Description= lines (a newline terminates the directive
@@ -629,6 +637,9 @@ func Load(path string) (*Config, error) {
 		}
 		if ac.GitEmail != "" && gitEmailInvalid.MatchString(ac.GitEmail) {
 			return nil, fmt.Errorf("agent %s: git_email must not contain whitespace or control characters, got %q", key, ac.GitEmail)
+		}
+		if ac.GitName != "" && gitNameInvalid.MatchString(ac.GitName) {
+			return nil, fmt.Errorf("agent %s: git_name must not contain control characters, got %q", key, ac.GitName)
 		}
 		if agentNameInvalid.MatchString(ac.Name) {
 			return nil, fmt.Errorf("agent %s: name must not contain control characters, got %q", key, ac.Name)
