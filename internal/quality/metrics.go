@@ -204,7 +204,15 @@ func WriteRuntimeConfig(homeDir string, rc RuntimeConfig) error {
 }
 
 // RunIteration executes the full post-session quality loop side effects.
-// Returns exit code 0 on pass, 1 on blocking failure, 2 on max attempts blocked.
+// Returns exit code:
+//
+//	0 on pass (or advisory/disabled no-op),
+//	1 on a non-final blocking failure (feedback injected, agent may retry),
+//	2 on the transition into blocked — max attempts just exhausted; the runner
+//	  fires the [BLOCKED] alert once and feedback is cleared (the alert is the
+//	  human signal, the agent cannot self-recover),
+//	3 on an already-blocked iteration — a quiet no-op that does NOT re-run gates,
+//	  re-alert, or re-inject feedback (the human was alerted on the transition).
 func RunIteration(homeDir, workdir string, rc RuntimeConfig) (int, error) {
 	if !rc.Enabled || len(rc.Gates) == 0 {
 		return 0, nil
@@ -215,7 +223,10 @@ func RunIteration(homeDir, workdir string, rc RuntimeConfig) (int, error) {
 		return 1, err
 	}
 	if state.Blocked && rc.OnFailure != "block-push" {
-		return 2, fmt.Errorf("task %q is blocked after exhausting quality attempts", taskID)
+		// Already blocked: quiet no-op. Return 3 (not 2) so the runner does not
+		// re-fire the [BLOCKED] alert every loop. Feedback was already cleared
+		// at the transition, so nothing to re-inject here.
+		return 3, fmt.Errorf("task %q is blocked after exhausting quality attempts", taskID)
 	}
 
 	if rc.OnFailure == "block-push" {
@@ -260,6 +271,12 @@ func RunIteration(homeDir, workdir string, rc RuntimeConfig) (int, error) {
 
 	if rc.MaxAttempts > 0 && attempt >= rc.MaxAttempts {
 		state.Blocked = true
+		// Clear the loop feedback at the transition: the agent has exhausted its
+		// attempts and cannot self-recover, so re-prepending the feedback every
+		// subsequent iteration is noise. The [BLOCKED] alert is the human signal.
+		if err := ClearFeedback(homeDir, claudeLocal); err != nil {
+			return 2, err
+		}
 		if err := SaveState(homeDir, state); err != nil {
 			return 2, err
 		}

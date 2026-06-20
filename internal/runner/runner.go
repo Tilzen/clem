@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jahwag/clem/internal/agent"
 	"github.com/jahwag/clem/internal/agentdoc"
 	"github.com/jahwag/clem/internal/config"
 	"github.com/jahwag/clem/internal/coordination"
@@ -556,7 +557,7 @@ func Generate(cfg *config.Config, agentKey string) string {
 		Prompt:         strings.ReplaceAll(promptText, "'", `'\''`),
 		OSUser:         cfg.OSUsername(agentKey),
 		HomeDir:        fmt.Sprintf("/home/%s", cfg.OSUsername(agentKey)),
-		SleepActive: iterSec,
+		SleepActive:    iterSec,
 		// Night sleep defaults to the active value; iteration_night overrides.
 		// History: a hardcoded 2x night doubler was removed on the belief the
 		// prompt-cache TTL was 5 min. Subscription Claude Code actually gets
@@ -765,16 +766,25 @@ func qualityRunnerSnippets(cfg *config.Config, agentKey string, ac config.AgentC
 	feedbackLoad = `if [ -f "$HOME/.clem/quality-feedback.txt" ]; then
         RUNNER_WARNINGS="${RUNNER_WARNINGS}$(cat "$HOME/.clem/quality-feedback.txt") "
     fi`
-	runCmd = `if [ -f "$HOME/.clem/quality.json" ]; then
+	// clem is referenced by absolute path: the agent OS user's PATH is not
+	// guaranteed to contain it. rc 127 (binary missing) must NOT be treated as
+	// a gate pass nor fire the blocked alert; rc 2 is the transition into
+	// blocked (alert once); rc 3 is an already-blocked no-op (log only, the
+	// human was already alerted on the transition).
+	runCmd = fmt.Sprintf(`if [ -f "$HOME/.clem/quality.json" ]; then
         QUALITY_RC=0
-        clem quality run --home "$HOME" --workdir "$WORKDIR" || QUALITY_RC=$?
+        %s quality run --home "$HOME" --workdir "$WORKDIR" || QUALITY_RC=$?
         log "Quality gates finished (rc=${QUALITY_RC})"
-        if [ "$QUALITY_RC" -eq 2 ]; then
+        if [ "$QUALITY_RC" -eq 127 ]; then
+            log "ERROR: clem not found at %s — quality gates skipped"
+        elif [ "$QUALITY_RC" -eq 2 ]; then
             log "Quality gates exhausted max attempts — alerting"
             source "$HOME/.env" 2>/dev/null
             {{.QualityBlockedAlert}}
+        elif [ "$QUALITY_RC" -eq 3 ]; then
+            log "Task already blocked — no-op (alert already sent)"
         fi
-    fi`
+    fi`, agent.ClemBin, agent.ClemBin)
 	blockedMsg := fmt.Sprintf("⚠️ %s: quality gates failed repeatedly — task [BLOCKED]. Manual intervention required.", escapeForAlert(ac.Name))
 	blockedBody := coordination.RenderAlert(backend, coordination.AlertParams{
 		Repo:    cfg.Coordination.GithubRepo,

@@ -9,9 +9,9 @@ import (
 )
 
 const (
-	stateFileName   = "quality-state.json"
-	taskIDFileName  = "current-task-id"
-	feedbackFile    = "quality-feedback.txt"
+	stateFileName  = "quality-state.json"
+	taskIDFileName = "current-task-id"
+	feedbackFile   = "quality-feedback.txt"
 )
 
 // StatePath returns ~/.clem/quality-state.json under homeDir.

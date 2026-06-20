@@ -111,22 +111,45 @@ func TestIntegration_ClosedLoopConvergence(t *testing.T) {
 
 func TestIntegration_MaxAttemptsBlocks(t *testing.T) {
 	h := newHarness(t, "exit 1", 2)
+	claudeLocal := filepath.Join(h.Work, "CLAUDE.local.md")
 
 	code, _ := h.runIteration(t)
 	if code != 1 {
 		t.Fatalf("first fail: code=%d", code)
 	}
+	// After a non-final failure, feedback is injected for the agent to retry.
+	if _, err := os.Stat(quality.FeedbackPath(h.Home)); err != nil {
+		t.Fatalf("feedback file should exist after non-final fail: %v", err)
+	}
+
+	// Second fail = the transition into blocked: returns 2 (the runner alerts
+	// once on this), AND clears the loop feedback (the agent can't self-recover).
 	code, err := h.runIteration(t)
 	if code != 2 {
-		t.Fatalf("second fail: want code 2 (blocked), got %d err=%v", code, err)
+		t.Fatalf("transition fail: want code 2 (blocked), got %d err=%v", code, err)
 	}
 	state, _ := quality.LoadState(h.Home)
 	if !state.Blocked {
 		t.Fatal("state should be blocked")
 	}
+	if _, err := os.Stat(quality.FeedbackPath(h.Home)); !os.IsNotExist(err) {
+		t.Fatal("feedback file should be cleared on transition into blocked")
+	}
+	if content, _ := os.ReadFile(claudeLocal); strings.Contains(string(content), quality.FeedbackStartMarker) {
+		t.Fatalf("CLAUDE.local.md feedback block should be cleared on transition: %q", content)
+	}
+
+	// Third run = already-blocked no-op: returns 3 (NOT 2, so the runner does
+	// not re-alert) and does not re-create feedback.
 	code, _ = h.runIteration(t)
-	if code != 2 {
-		t.Fatalf("third run on blocked task: want code 2, got %d", code)
+	if code != 3 {
+		t.Fatalf("already-blocked run: want code 3 (quiet no-op), got %d", code)
+	}
+	if _, err := os.Stat(quality.FeedbackPath(h.Home)); !os.IsNotExist(err) {
+		t.Fatal("already-blocked run must not re-create feedback file")
+	}
+	if content, _ := os.ReadFile(claudeLocal); strings.Contains(string(content), quality.FeedbackStartMarker) {
+		t.Fatalf("already-blocked run must not re-inject feedback block: %q", content)
 	}
 }
 

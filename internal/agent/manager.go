@@ -132,6 +132,40 @@ func EnsureSystemUser(username string) error {
 	return nil
 }
 
+// ClemBin is the absolute path the clem binary is installed to during
+// provision. The agent OS user's PATH is not guaranteed to contain the
+// operator's clem location, so the runner template and the pre-push hook
+// reference clem by this absolute path (mirroring how pipelock/agent-vault are
+// referenced). Installing here also lands clem on the agent user's PATH.
+const ClemBin = "/usr/local/bin/clem"
+
+// InstallClem copies the currently-running clem binary to ClemBin (mode 0755)
+// so the agent runner and the git pre-push hook — which invoke clem by absolute
+// path — find it regardless of the agent user's PATH. Mirrors the
+// install-to-/usr/local/bin pattern used for the other trusted tools, but the
+// source is our own executable (resolved through any symlink) rather than a
+// pinned download. Must run as root (provision already requires it) so the
+// destination is writable and world-executable for every agent user.
+func InstallClem() error {
+	src, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolving running clem binary: %w", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(src); err == nil {
+		src = resolved
+	}
+	// Already in place (e.g. clem was launched from ClemBin): nothing to do.
+	if resolved, err := filepath.EvalSymlinks(ClemBin); err == nil && resolved == src {
+		fmt.Printf("  clem already installed at %s\n", ClemBin)
+		return nil
+	}
+	fmt.Printf("  installing clem to %s\n", ClemBin)
+	if out, err := sys.Run("install", "-m", "0755", src, ClemBin); err != nil {
+		return fmt.Errorf("installing clem to %s: %w\n%s", ClemBin, err, out)
+	}
+	return nil
+}
+
 // PipelockVersion is the pinned pipelock release clem installs. Bump
 // deliberately; the binary is a security boundary (the egress firewall/DLP).
 const PipelockVersion = "v2.5.0"
@@ -624,15 +658,24 @@ while read local_ref local_sha remote_ref remote_sha; do
   fi
 done
 
-# Pass 5: quality gates (when provisioned with quality.enabled).
+# Pass 5: quality gates (when provisioned with quality.enabled). clem is
+# referenced by absolute path because the agent user's PATH is not guaranteed
+# to contain it. A 127 (binary missing) must NOT masquerade as a gate failure:
+# fail closed with a distinct message so the operator can fix the install,
+# mirroring how the other trusted tools are required by absolute path.
 if [ -f "$HOME/.clem/quality.json" ]; then
-  if ! clem quality pre-push --home "$HOME" 2>&1; then
+  CLEM_RC=0
+  %s quality pre-push --home "$HOME" 2>&1 || CLEM_RC=$?
+  if [ "$CLEM_RC" -eq 127 ]; then
+    echo "clem pre-push hook: push blocked - clem not found at %s (quality gates could not run)" >&2
+    exit 1
+  elif [ "$CLEM_RC" -ne 0 ]; then
     echo "clem pre-push hook: push blocked - quality gates failed" >&2
     exit 1
   fi
 fi
 exit 0
-`, PrePushAllowSecretMarker, SecretPatternRegex, SecretCodePatternRegex, UnicodeTrapBytesPattern, PrePushAllowSecretMarker)
+`, PrePushAllowSecretMarker, SecretPatternRegex, SecretCodePatternRegex, UnicodeTrapBytesPattern, PrePushAllowSecretMarker, ClemBin, ClemBin)
 
 // stripGitConfigKey removes every line of `content` whose leading text is
 // "\t<key> = ". Used to clear stale name/email entries before re-writing them

@@ -62,6 +62,14 @@ func runProvision(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Provisioning project: %s\n", cfg.Project)
 
+	// Install the clem binary onto the host PATH (/usr/local/bin) before the
+	// agent loop: the runner template and the git pre-push hook invoke clem by
+	// absolute path, and the agent OS user's PATH is not guaranteed to contain
+	// the operator's clem location. Mirrors the trusted-tool install pattern.
+	if err := agent.InstallClem(); err != nil {
+		return err
+	}
+
 	// Phase 2: stand up the agent-vault credential proxy before the agent loop
 	// so per-agent tokens can be minted inside it. No-op unless backend active.
 	if cfg.Vault.IsAgentVault() {

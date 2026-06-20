@@ -143,8 +143,48 @@ func TestPrePushHookContent_IsExecutableBash(t *testing.T) {
 	if !strings.Contains(prePushHookContent, "clem quality pre-push") {
 		t.Error("pre-push hook should invoke quality pre-push when quality.json exists")
 	}
+	// clem must be invoked by absolute path: the agent OS user's PATH is not
+	// guaranteed to contain it (FIX 1). A bare `clem quality pre-push` would
+	// exit 127 and masquerade as a gate failure.
+	if !strings.Contains(prePushHookContent, ClemBin+" quality pre-push") {
+		t.Errorf("pre-push hook must invoke clem by absolute path %q", ClemBin)
+	}
+	if strings.Contains(prePushHookContent, "\n  clem quality pre-push") {
+		t.Error("pre-push hook must not invoke clem via bare PATH")
+	}
+	// A 127 (clem missing) must be distinguished from a genuine gate failure.
+	if !strings.Contains(prePushHookContent, `CLEM_RC" -eq 127`) {
+		t.Error("pre-push hook must distinguish rc 127 (clem missing) from a real gate failure")
+	}
+	if !strings.Contains(prePushHookContent, "clem not found at "+ClemBin) {
+		t.Error("pre-push hook should emit a distinct 'clem not found' message on rc 127, not the misleading 'quality gates failed'")
+	}
 	if !strings.Contains(prePushHookContent, `grep -E '^\+([^+]|$)'`) {
 		t.Error("pre-push hook should restrict secret-pattern scanning to ADDED diff lines (^+ excluding ^+++)")
+	}
+}
+
+// TestInstallClem_CopiesRunningBinaryToUsrLocalBin guards FIX 1: provision must
+// install the running clem binary onto the host PATH (/usr/local/bin/clem, mode
+// 0755) so the runner and pre-push hook find it by absolute path. Mirrors the
+// pipelock/agent-vault install assertions.
+func TestInstallClem_CopiesRunningBinaryToUsrLocalBin(t *testing.T) {
+	stub := withStub(t)
+	if err := InstallClem(); err != nil {
+		t.Fatalf("InstallClem: %v", err)
+	}
+	var found bool
+	for _, c := range stub.calls {
+		if c[0] == "install" {
+			found = true
+			// Expect: install -m 0755 <src> /usr/local/bin/clem
+			if len(c) < 5 || c[1] != "-m" || c[2] != "0755" || c[len(c)-1] != ClemBin {
+				t.Errorf("unexpected install invocation: %v", c)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected an `install` call placing clem at %s, got calls=%v", ClemBin, stub.calls)
 	}
 }
 
