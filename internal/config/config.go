@@ -47,6 +47,14 @@ var snowflakeRe = regexp.MustCompile(`^[0-9]{17,19}$`)
 // parser treats them as line or field breaks.
 var gitEmailInvalid = regexp.MustCompile(`[\s\x00-\x1f\x7f]`)
 
+// gitNameInvalid matches ASCII control characters — the characters that corrupt
+// ~/.gitconfig, where git_name lands as the value of "name = <value>" under
+// the [user] section. A newline injects a new line, allowing a crafted name
+// to add git config sections (e.g. "[commit]\n\tgpgsign = false" disables
+// commit signing). Spaces are permitted because display names like
+// "Ada Lovelace" are the common case.
+var gitNameInvalid = regexp.MustCompile(`[\x00-\x1f\x7f]`)
+
 // agentNameInvalid matches ASCII control characters — the characters that
 // corrupt the line-delimited sinks name and role are written into. The worst
 // sink is systemd unit Description= lines (a newline terminates the directive
@@ -282,6 +290,11 @@ type AgentConfig struct {
 	// .env materialization — this is how DISCORD_TOKEN (gateway, unbrokerable)
 	// stays real while ANTHROPIC_API_KEY/Slack/Typefully/GH_TOKEN are brokered.
 	BrokeredSecrets []string `yaml:"brokered_secrets"`
+	// RevealSecrets lists granted vault keys that are intentionally seeded as
+	// real values in the agent's .env (explicit opt-out from fail-safe exposure
+	// check). Use for keys that cannot be HTTP-brokered: deploy keys, SSH keys,
+	// gRPC credentials, WebSocket auth, non-secret usernames.
+	RevealSecrets []string `yaml:"reveal_secrets"`
 	// EgressRestrictionExperimental is DEPRECATED — superseded by the top-level
 	// egress block (pipelock + nftables). When set true it still opts the agent
 	// into egress containment (treated like egress: true) but Load logs a
@@ -581,6 +594,12 @@ func Load(path string) (*Config, error) {
 	default:
 		return nil, fmt.Errorf("vault.backend must be env or agent-vault, got %q", cfg.Vault.Backend)
 	}
+	switch cfg.Vault.ExposurePolicy {
+	case "", "warn", "strict", "off":
+		// valid
+	default:
+		return nil, fmt.Errorf("vault.exposure_policy must be warn, strict, or off (got %q)", cfg.Vault.ExposurePolicy)
+	}
 	sourceNames := make(map[string]bool, len(cfg.Vault.Backends))
 	sawSops := false
 	for _, b := range cfg.Vault.Backends {
@@ -633,6 +652,9 @@ func Load(path string) (*Config, error) {
 		if ac.GitEmail != "" && gitEmailInvalid.MatchString(ac.GitEmail) {
 			return nil, fmt.Errorf("agent %s: git_email must not contain whitespace or control characters, got %q", key, ac.GitEmail)
 		}
+		if ac.GitName != "" && gitNameInvalid.MatchString(ac.GitName) {
+			return nil, fmt.Errorf("agent %s: git_name must not contain control characters, got %q", key, ac.GitName)
+		}
 		if agentNameInvalid.MatchString(ac.Name) {
 			return nil, fmt.Errorf("agent %s: name must not contain control characters, got %q", key, ac.Name)
 		}
@@ -682,6 +704,9 @@ func Load(path string) (*Config, error) {
 			// span multiple sops vaults — no first-vault constraint.
 		}
 		ac.normalizeSubagentModel()
+		if ac.SubagentModel != "" && !modelRe.MatchString(ac.SubagentModel) {
+			return nil, fmt.Errorf("agent %s: subagent_model %q must match %s (rendered into a bash export in runner.sh)", key, ac.SubagentModel, modelRe.String())
+		}
 		if err := ac.ResourceLimits.validate(key); err != nil {
 			return nil, err
 		}
@@ -692,6 +717,9 @@ func Load(path string) (*Config, error) {
 			return nil, err
 		}
 		if err := validateAgentQualityGates(&cfg, key, ac.QualityGates); err != nil {
+			return nil, err
+		}
+		if err := validateAgentVaults(key, ac.Vaults); err != nil {
 			return nil, err
 		}
 		cfg.Agents[key] = ac
@@ -712,6 +740,15 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+func validateAgentVaults(agentKey string, vaults []string) error {
+	for _, name := range vaults {
+		if !validName.MatchString(name) {
+			return fmt.Errorf("agent %s: vault name %q must match %s", agentKey, name, validName.String())
+		}
+	}
+	return nil
 }
 
 func (c *Coordination) validate() error {

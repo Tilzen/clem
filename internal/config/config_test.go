@@ -603,6 +603,26 @@ agents:
 	}
 }
 
+func TestLoad_SubagentModelRejectsShellMetacharacters(t *testing.T) {
+	cases := []string{
+		`"$(touch /tmp/pwned)"`,
+		"$(reboot)",
+		`"model with spaces"`,
+		`"model'quote"`,
+	}
+	for _, val := range cases {
+		path := writeYAML(t, subagentYAML(val))
+		_, err := Load(path)
+		if err == nil {
+			t.Errorf("Load accepted subagent_model %s, want error", val)
+			continue
+		}
+		if !strings.Contains(err.Error(), "subagent_model") {
+			t.Errorf("error should name subagent_model, got: %v", err)
+		}
+	}
+}
+
 func TestLoad_GitIdentityParsed(t *testing.T) {
 	path := writeYAML(t, `
 project: myteam
@@ -676,6 +696,65 @@ agents:
 				t.Errorf("error should name git_email, got: %v", err)
 			}
 		})
+	}
+}
+
+func TestLoad_GitNameRejectsControlCharacters(t *testing.T) {
+	cases := map[string]string{
+		"newline":         "Ada\n[commit]\n\tgpgsign = false",
+		"carriage return": "Ada\rEvil",
+		"tab":             "Ada\tEvil",
+		"control char":    "Ada\x01Evil",
+	}
+	for name, gitName := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := writeYAML(t, `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+operator:
+  discord_ids: ["277434478803156993"]
+agents:
+  lead:
+    name: "Ada"
+    model: "claude-sonnet-4-6"
+    git_name: `+fmt.Sprintf("%q", gitName)+`
+`)
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("Load accepted git_name %q, want error", gitName)
+			}
+			if !strings.Contains(err.Error(), "git_name") {
+				t.Errorf("error should name git_name, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoad_GitNameAllowsSpaces(t *testing.T) {
+	path := writeYAML(t, `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+operator:
+  discord_ids: ["277434478803156993"]
+agents:
+  lead:
+    name: "Ada"
+    model: "claude-sonnet-4-6"
+    git_name: "Ada Lovelace"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load rejected git_name with space: %v", err)
+	}
+	ac := cfg.Agents["lead"]
+	if ac.GitName != "Ada Lovelace" {
+		t.Errorf("GitName = %q, want %q", ac.GitName, "Ada Lovelace")
 	}
 }
 
@@ -2278,5 +2357,66 @@ agents:
 `
 	if _, err := Load(writeYAML(t, yaml)); err == nil || !strings.Contains(err.Error(), "iteration_night") {
 		t.Errorf("expected iteration_night validation error, got %v", err)
+	}
+}
+
+func TestLoad_RejectsInvalidVaultName(t *testing.T) {
+	path := writeYAML(t, minYAML("")+`
+    vaults: ["missing // .vaults"]
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected load error for malicious vault name")
+	}
+	if !strings.Contains(err.Error(), "vault name") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoad_AcceptsValidVaultNames(t *testing.T) {
+	path := writeYAML(t, minYAML("")+`
+    vaults: [github, discord-lead]
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Agents["lead"].Vaults) != 2 {
+		t.Fatalf("vaults = %v", cfg.Agents["lead"].Vaults)
+	}
+}
+
+func TestLoad_ExposurePolicyValid(t *testing.T) {
+	for _, policy := range []string{"", "warn", "strict", "off"} {
+		line := ""
+		if policy != "" {
+			line = "\nvault:\n  exposure_policy: " + policy
+		}
+		yaml := minYAML("") + line
+		if _, err := Load(writeYAML(t, yaml)); err != nil {
+			t.Errorf("exposure_policy %q should load, got: %v", policy, err)
+		}
+	}
+}
+
+func TestLoad_ExposurePolicyRejectsInvalid(t *testing.T) {
+	yaml := minYAML("") + "\nvault:\n  exposure_policy: paranoid"
+	_, err := Load(writeYAML(t, yaml))
+	if err == nil {
+		t.Fatal("invalid exposure_policy must be rejected")
+	}
+	if !strings.Contains(err.Error(), "exposure_policy") {
+		t.Errorf("error must name exposure_policy, got: %v", err)
+	}
+}
+
+func TestLoad_RevealSecretsAccepted(t *testing.T) {
+	yaml := minYAML("") + "\n    reveal_secrets: [DISCORD_TOKEN, DEPLOY_KEY]"
+	cfg, err := Load(writeYAML(t, yaml))
+	if err != nil {
+		t.Fatalf("reveal_secrets should load: %v", err)
+	}
+	if len(cfg.Agents["lead"].RevealSecrets) != 2 {
+		t.Errorf("reveal_secrets = %v, want 2 entries", cfg.Agents["lead"].RevealSecrets)
 	}
 }

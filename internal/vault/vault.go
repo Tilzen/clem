@@ -87,6 +87,9 @@ func Init() error {
 // Set sets a secret key for a vault in secrets.sops.yaml using sops --set.
 // keyval should be "KEY=value".
 func Set(vaultName, keyval string) error {
+	if err := ValidateVaultName(vaultName); err != nil {
+		return err
+	}
 	parts := strings.SplitN(keyval, "=", 2)
 	if len(parts) != 2 {
 		return fmt.Errorf("invalid format, expected KEY=value, got: %s", keyval)
@@ -131,6 +134,9 @@ func Set(vaultName, keyval string) error {
 
 // Delete removes a secret key (or whole vault if key is empty) from secrets.sops.yaml.
 func Delete(vaultName, key string) error {
+	if err := ValidateVaultName(vaultName); err != nil {
+		return err
+	}
 	if key != "" {
 		if err := validateSecretKey(key); err != nil {
 			return err
@@ -165,6 +171,9 @@ func Delete(vaultName, key string) error {
 
 // Get retrieves a secret key for a vault from secrets.sops.yaml.
 func Get(vaultName, key string) error {
+	if err := ValidateVaultName(vaultName); err != nil {
+		return err
+	}
 	if err := validateSecretKey(key); err != nil {
 		return err
 	}
@@ -240,6 +249,11 @@ func List() error {
 // Later vaults in the list win on key conflicts.
 // Falls back to legacy agents: structure with a warning if vaults: key is absent.
 func DecryptForAgent(agentKey string, vaultNames []string) (map[string]string, error) {
+	for _, vaultName := range vaultNames {
+		if err := ValidateVaultName(vaultName); err != nil {
+			return nil, err
+		}
+	}
 	if err := ensureSops(); err != nil {
 		return nil, err
 	}

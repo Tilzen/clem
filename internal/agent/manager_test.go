@@ -1780,3 +1780,45 @@ func TestWriteSystemdEnvFile_RejectsNewline(t *testing.T) {
 		t.Fatal("expected error for newline in secret value")
 	}
 }
+
+func TestWriteWranglerConfig_LiteralStringsPreserveSpecialChars(t *testing.T) {
+	homeDir := t.TempDir()
+	// These chars corrupted the file when it used TOML basic strings:
+	// " broke the string delimiter and \ was treated as an escape prefix.
+	secrets := map[string]string{
+		"WRANGLER_OAUTH_TOKEN":   `tok"en\value`,
+		"WRANGLER_REFRESH_TOKEN": `ref\res"h`,
+		"WRANGLER_EXPIRATION":    "2099-01-01T00:00:00Z",
+	}
+	if err := WriteWranglerConfig("testuser", homeDir, secrets); err != nil {
+		t.Fatalf("WriteWranglerConfig: %v", err)
+	}
+	configPath := filepath.Join(homeDir, ".config", ".wrangler", "config", "default.toml")
+	b, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("reading config: %v", err)
+	}
+	got := string(b)
+	// Values must appear verbatim inside TOML literal strings (single-quoted).
+	if !strings.Contains(got, `oauth_token = 'tok"en\value'`) {
+		t.Errorf("oauth_token not written as literal string, got:\n%s", got)
+	}
+	if !strings.Contains(got, `refresh_token = 'ref\res"h'`) {
+		t.Errorf("refresh_token not written as literal string, got:\n%s", got)
+	}
+	info, _ := os.Stat(configPath)
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("config file mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestWriteWranglerConfig_SkipsWhenSecretsAbsent(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := WriteWranglerConfig("testuser", homeDir, map[string]string{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	configPath := filepath.Join(homeDir, ".config", ".wrangler", "config", "default.toml")
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Error("config file should not be written when secrets absent")
+	}
+}
