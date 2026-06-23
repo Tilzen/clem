@@ -117,50 +117,61 @@ func TestAgeKeyPath_UnderHomeConfig(t *testing.T) {
 	}
 }
 
-func TestBug127_TokenCleanupFailureAbortsProvision(t *testing.T) {
-	// Before fix: _ = SSH(host, fixRemote) discarded errors — token persisted silently.
-	old := remoteSSH
-	defer func() { remoteSSH = old }()
-	var gotCmd string
+func TestRemoteCloneCmd_NoTokenInURL(t *testing.T) {
+	cmd := remoteCloneCmd("clem", "https://github.com/org/clem.git", "ghp_secrettoken") // clem:allow-secret
+	if strings.Contains(cmd, "oauth2:") || strings.Contains(cmd, "ghp_secrettoken@") {
+		t.Fatalf("token must not be embedded in clone URL:\n%s", cmd)
+	}
+	for _, want := range []string{
+		`http.extraheader`,
+		`AUTHORIZATION: bearer ghp_secrettoken`,
+		`clone https://github.com/org/clem.git`,
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Fatalf("clone cmd missing %q:\n%s", want, cmd)
+		}
+	}
+}
+
+func TestRemoteCloneCmd_PublicRepoNoHeader(t *testing.T) {
+	cmd := remoteCloneCmd("clem", "https://github.com/org/clem.git", "")
+	if strings.Contains(cmd, "extraheader") {
+		t.Fatalf("public clone should not set extraheader:\n%s", cmd)
+	}
+}
+
+func TestProvision_AbortsBeforeStep3WhenCloneFails(t *testing.T) {
+	chdirTempGitRepo(t, "git@github.com:org/clem.git")
+	oldSSH := remoteSSH
+	oldSCP := remoteSCP
+	defer func() {
+		remoteSSH = oldSSH
+		remoteSCP = oldSCP
+	}()
+	var calls []string
 	remoteSSH = func(host, cmd string) error {
-		gotCmd = cmd
-		return fmt.Errorf("simulated ssh failure")
+		calls = append(calls, cmd)
+		if strings.Contains(cmd, "mkdir -p ~/.config/sops/age") {
+			return nil
+		}
+		if strings.Contains(cmd, "git ") {
+			return fmt.Errorf("simulated clone failure")
+		}
+		return fmt.Errorf("unexpected ssh: %s", cmd)
 	}
-	err := stripCloneTokenFromRemote("myhost", "clem", "https://github.com/org/clem.git")
+	remoteSCP = func(localPath, host, remotePath string) error { return nil }
+
+	err := Provision("myhost", "ghp_secrettoken") // clem:allow-secret
 	if err == nil {
-		t.Fatal("expected error when token cleanup SSH fails")
+		t.Fatal("expected Provision to fail when clone fails")
 	}
-	if !strings.Contains(err.Error(), "token") {
+	if !strings.Contains(err.Error(), "cloning repo") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := "cd ~/clem && git remote set-url origin https://github.com/org/clem.git"
-	if gotCmd != want {
-		t.Fatalf("fixRemote cmd = %q, want %q", gotCmd, want)
-	}
-}
-
-func TestStripCloneTokenFromRemote_SkipsEmptyURL(t *testing.T) {
-	old := remoteSSH
-	defer func() { remoteSSH = old }()
-	called := false
-	remoteSSH = func(host, cmd string) error {
-		called = true
-		return nil
-	}
-	if err := stripCloneTokenFromRemote("host", "clem", ""); err != nil {
-		t.Fatal(err)
-	}
-	if called {
-		t.Fatal("should not SSH when cleanURL is empty")
-	}
-}
-
-func TestStripCloneTokenFromRemote_Success(t *testing.T) {
-	old := remoteSSH
-	defer func() { remoteSSH = old }()
-	remoteSSH = func(host, cmd string) error { return nil }
-	if err := stripCloneTokenFromRemote("host", "clem", "https://github.com/org/clem.git"); err != nil {
-		t.Fatal(err)
+	for _, cmd := range calls {
+		if strings.Contains(cmd, "clem provision") {
+			t.Fatalf("step 3/3 must not run after clone failure, saw: %q", cmd)
+		}
 	}
 }
 
