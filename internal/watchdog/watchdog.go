@@ -27,9 +27,8 @@ send_alert() {
     local msg="$1"
     local safe_msg
     safe_msg=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1])[1:-1])" "$msg" 2>/dev/null) || safe_msg=$msg
-    if [ -n "${{.TokenEnvVar}}" ] && [ -n "{{.AlertChannel}}" ]; then
-        {{.AlertCurl}}
-    fi
+{{.AlertDedup}}
+    {{.AlertCurl}}
     echo "$(date -Iseconds) ALERT: $msg"
 }
 
@@ -275,6 +274,7 @@ type watchdogParams struct {
 	AlertChannel   string
 	TokenEnvVar    string
 	AlertCurl      string
+	AlertDedup     string
 	AgentChecks    string
 	EgressCheckDef string
 	EgressInvoke   string
@@ -369,6 +369,7 @@ func GenerateScript(cfg *config.Config) string {
 		AlertChannel:   alertChannel,
 		TokenEnvVar:    backend.TokenEnvVar,
 		AlertCurl:      alertCurl,
+		AlertDedup:     alertDedupBlock(cfg),
 		AgentChecks:    strings.TrimRight(checks.String(), "\n"),
 		AgentHomes:     agentHomes(cfg, keys),
 		EgressCheckDef: egressDef,
@@ -384,6 +385,7 @@ func GenerateScript(cfg *config.Config) string {
 		"{{.AlertChannel}}", p.AlertChannel,
 		"{{.TokenEnvVar}}", p.TokenEnvVar,
 		"{{.AlertCurl}}", p.AlertCurl,
+		"{{.AlertDedup}}", p.AlertDedup,
 		"{{.AgentChecks}}", p.AgentChecks,
 		"{{.AgentHomes}}", p.AgentHomes,
 		"{{.EgressCheckDef}}", p.EgressCheckDef,
@@ -393,6 +395,26 @@ func GenerateScript(cfg *config.Config) string {
 		"{{.VaultInvoke}}", p.VaultInvoke,
 	)
 	return r.Replace(watchdogScript)
+}
+
+// alertDedupBlock suppresses duplicate Jira incident tickets when alerts_mode is
+// issue — a flapping agent otherwise creates one ticket per watchdog tick.
+func alertDedupBlock(cfg *config.Config) string {
+	if cfg.Coordination.Backend != "jira" || cfg.JiraAlertsMode() != "issue" {
+		return ""
+	}
+	return `    local now dedup_file msg_hash last_hash last_ts
+    now=$(date +%s)
+    dedup_file="$COOLDOWN_DIR/last-incident.hash"
+    msg_hash=$(printf '%s' "$msg" | sha256sum | awk '{print $1}')
+    if [ -f "$dedup_file" ]; then
+        read -r last_hash last_ts < "$dedup_file"
+        if [ "$last_hash" = "$msg_hash" ] && (( now - last_ts < COOLDOWN_SECONDS )); then
+            echo "$(date -Iseconds) ALERT (deduped): $msg"
+            return
+        fi
+    fi
+    printf '%s %s\n' "$msg_hash" "$now" > "$dedup_file"`
 }
 
 // GenerateService renders the watchdog oneshot systemd service.

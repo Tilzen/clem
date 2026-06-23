@@ -1,6 +1,7 @@
 package coordination
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -175,9 +176,105 @@ func TestAlertCurlGuard_JiraRequiresTokenUserAndIssue(t *testing.T) {
 		`[ -n "$JIRA_API_TOKEN" ]`,
 		`[ -n "$JIRA_USERNAME" ]`,
 		`[ -n "OPS-1" ]`,
+		`curl example`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("AlertCurlGuard jira missing %q:\n%s", want, got)
 		}
 	}
+}
+
+func TestJiraAlertADF_ValidJSONWithSpecialChars(t *testing.T) {
+	b, _ := Known("jira")
+	msg := "he said \"hi\"\nline\\two"
+	got := RenderAlert(b, AlertParams{
+		Repo:    "acme.atlassian.net",
+		Channel: "OPS-12",
+		Message: msg,
+	})
+	payload := extractCurlJSONPayload(t, got)
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(payload), &doc); err != nil {
+		t.Fatalf("Jira ADF alert payload is not valid JSON: %v\npayload: %s", err, payload)
+	}
+	body, ok := doc["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected body object, got %T", doc["body"])
+	}
+	content, ok := body["content"].([]any)
+	if !ok || len(content) == 0 {
+		t.Fatalf("expected content array, got %v", body["content"])
+	}
+	para, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected paragraph object, got %T", content[0])
+	}
+	paraContent, ok := para["content"].([]any)
+	if !ok || len(paraContent) == 0 {
+		t.Fatalf("expected paragraph content, got %v", para["content"])
+	}
+	textNode, ok := paraContent[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected text node, got %T", paraContent[0])
+	}
+	if textNode["text"] != msg {
+		t.Fatalf("text = %q, want %q", textNode["text"], msg)
+	}
+}
+
+func TestJiraAlertADF_RuntimeUsesMsgVariable(t *testing.T) {
+	b, _ := Known("jira")
+	got := RenderAlert(b, AlertParams{
+		Repo:    "acme.atlassian.net",
+		Channel: "OPS-12",
+		Message: "$safe_msg",
+	})
+	for _, want := range []string{`"$msg"`, `json.dumps`, `rest/api/3/issue/OPS-12/comment`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("runtime jira comment alert missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestJiraAlertIssueMode_ValidJSONWithSpecialChars(t *testing.T) {
+	b, _ := Known("jira")
+	msg := "disk \"full\"\npath\\here"
+	got := RenderAlert(b, AlertParams{
+		Repo:            "acme.atlassian.net",
+		Message:         msg,
+		JiraProject:     "ENG",
+		JiraAlertsMode:  "issue",
+		JiraAlertsLabel: "clem-incident",
+		JiraIssueType:   "Incident",
+	})
+	payload := extractCurlJSONPayload(t, got)
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(payload), &doc); err != nil {
+		t.Fatalf("Jira issue-create payload is not valid JSON: %v\npayload: %s", err, payload)
+	}
+	inner, ok := doc["fields"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected fields object, got %T", doc["fields"])
+	}
+	if inner["summary"] != msg {
+		t.Fatalf("summary = %q, want %q", inner["summary"], msg)
+	}
+}
+
+func extractCurlJSONPayload(t *testing.T, curl string) string {
+	t.Helper()
+	const marker = `-d "`
+	idx := strings.Index(curl, marker)
+	if idx == -1 {
+		t.Fatalf("curl missing -d payload:\n%s", curl)
+	}
+	rest := curl[idx+len(marker):]
+	end := strings.LastIndex(rest, `"`)
+	if end == -1 {
+		t.Fatalf("unterminated -d payload:\n%s", curl)
+	}
+	raw := rest[:end]
+	unescaped := strings.ReplaceAll(raw, `\"`, `"`)
+	unescaped = strings.ReplaceAll(unescaped, `\\`, `\`)
+	return unescaped
 }

@@ -466,7 +466,7 @@ jobs:
           watch=/home/jiratest-lead/.local/bin/clem-jira-watch.sh
           sudo test -x "$watch"
           sudo bash -n "$watch"
-          sudo grep -q '/rest/api/3/search' "$watch"
+          sudo grep -q '/rest/api/3/search/jql' "$watch"
           sudo grep -q 'sprint in openSprints' "$watch"
           sudo grep -q 'tmux send-keys' "$watch"
           sudo test -f /etc/systemd/system/clem-jira-watch-jiratest-lead.service

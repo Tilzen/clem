@@ -5,7 +5,7 @@
 #   - Jira Cloud site with project ENG (or edit below)
 #   - Labels: clem-todo, clem-in-progress, clem-done, clem-blocked
 #   - Meta-issues for alerts and lessons (issue keys below)
-#   - pipx install mcp-atlassian
+#   - pipx install mcp-atlassian==0.21.1
 #   - JIRA_USERNAME + JIRA_API_TOKEN in each agent vault
 
 project: sample
@@ -15,7 +15,7 @@ coordination:
   jira:
     site: "${JIRA_SITE:-your-org.atlassian.net}"
     project: "${JIRA_PROJECT:-ENG}"
-    jql_extra: "AND sprint in openSprints()"
+    jql_extra: "AND sprint in openSprints()"   # appended verbatim to watcher JQL (operator-trusted)
   channels:
     tasks:   "clem-todo"
     alerts:  "${JIRA_ALERTS_ISSUE:-OPS-12}"

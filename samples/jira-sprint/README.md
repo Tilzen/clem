@@ -8,7 +8,7 @@ and wakes the tmux session when new claimable issues appear.
 ## Prerequisites
 
 - Jira Cloud site (Atlassian Cloud)
-- `pipx install mcp-atlassian` on the host
+- `pipx install mcp-atlassian==0.21.1` on the host
 - Project with labels: `clem-todo`, `clem-in-progress`, `clem-done`, `clem-blocked`
 - Vault secrets per agent: `JIRA_USERNAME`, `JIRA_API_TOKEN`, and `GH_TOKEN` for PRs
 

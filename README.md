@@ -341,7 +341,7 @@ REST API and wakes the tmux session when new claimable issues appear.
 1. Jira Cloud site (e.g. `your-org.atlassian.net`).
 2. Labels on your project: `clem-todo`, `clem-in-progress`, `clem-done`, `clem-blocked`.
 3. Optional meta-issues for alerts/lessons (when using `alerts_mode: comment` / `lessons_mode: issue`).
-4. `pipx install mcp-atlassian` on the host.
+4. `pipx install mcp-atlassian==0.21.1` on the host.
 5. `JIRA_USERNAME` + `JIRA_API_TOKEN` in each agent's vault (see below).
 
 **Configurable Jira behaviour** (all optional — sensible defaults match label-only workflows):
@@ -366,7 +366,7 @@ coordination:
   jira:
     site: "your-org.atlassian.net"
     project: "ENG"
-    jql_extra: "AND sprint in openSprints()"   # optional sprint scope
+    jql_extra: "AND sprint in openSprints()"   # optional; appended verbatim to watcher JQL (operator-trusted)
     alerts_mode: comment          # comment | issue
     status_mode: labels           # labels | transitions | both
     lessons_mode: issue           # issue | confluence
@@ -470,7 +470,7 @@ coordination:
   jira:
     site: string            # Atlassian Cloud hostname (required when backend is jira)
     project: string         # Jira project key (e.g. ENG)
-    jql_extra: string       # optional JQL fragment (e.g. AND sprint in openSprints())
+    jql_extra: string       # optional JQL fragment appended verbatim to watcher JQL (operator-trusted)
     alerts_mode: string     # comment (default) | issue
     alerts_label: string    # label on created alert issues (default clem-incident)
     alerts_issue_type: string  # Jira issue type for alerts_mode: issue (default Task)
@@ -574,7 +574,7 @@ Check `clem logs <agent>`. The runner logs MCP server startup. If `mcp-discord` 
 Confirm `coordination.backend: github`, `github_repo`, and `channels.tasks` are set. Check the watcher: `systemctl status clem-github-watch-<project>-<agent>.service` and `~/.claude/<agent>-github-watch.log` under the agent's home. The watcher needs `GH_TOKEN` in the agent's `.env`. Open issues must have the tasks label and no assignee. With `egress:` enabled, ensure `api.github.com` is reachable through the proxy (automatically allowed when `backend: github`).
 
 **Agent not picking up Jira tasks**  
-Confirm `coordination.backend: jira`, `jira.site`, `jira.project`, and `channels.tasks` are set. Check the watcher: `systemctl status clem-jira-watch-<project>-<agent>.service` and `~/.claude/<agent>-jira-watch.log`. The watcher needs `JIRA_USERNAME` and `JIRA_API_TOKEN` in the agent's `.env`. Ensure `mcp-atlassian` is installed (`pipx install mcp-atlassian`). With `egress:` enabled, `{jira.site}` is automatically allowed when `backend: jira`.
+Confirm `coordination.backend: jira`, `jira.site`, `jira.project`, and `channels.tasks` are set. Check the watcher: `systemctl status clem-jira-watch-<project>-<agent>.service` and `~/.claude/<agent>-jira-watch.log`. The watcher needs `JIRA_USERNAME` and `JIRA_API_TOKEN` in the agent's `.env`. Ensure `mcp-atlassian` is installed (`pipx install mcp-atlassian==0.21.1`). With `egress:` enabled, `{jira.site}` is automatically allowed when `backend: jira`.
 
 **`clem login` keeps prompting daily / `clem status` flips to `EXPIRED` every 8 hours**  
 You probably ran a clem older than v0.8.4. The Claude Max access token genuinely lasts only ~8 hours, but Claude Code refreshes it automatically using the long-lived refresh token stored alongside it. Pre-0.8.4 `clem status` displayed the *access* token expiry and pre-0.8.4 `NeedsLogin` gated on a 7-day window - so it always reported "expired" and trained operators to log in daily for nothing. Upgrade to v0.8.4+; status now shows `auto-refresh` whenever a refresh token is present, and only reports `missing` when manual `clem login` is actually required.

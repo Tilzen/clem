@@ -8,8 +8,8 @@ type JiraCoordination struct {
 	Site string `yaml:"site"`
 	// Project is the Jira project key (e.g. ENG).
 	Project string `yaml:"project"`
-	// JQLExtra is an optional fragment appended to the task-board JQL in the
-	// issue watcher, e.g. `AND sprint in openSprints()` for sprint-scoped work.
+	// JQLExtra is an optional fragment appended verbatim to the task-board JQL in
+	// the issue watcher (operator-trusted), e.g. `AND sprint in openSprints()`.
 	JQLExtra string `yaml:"jql_extra"`
 	// AlertsMode controls how watchdog/runtime alerts are delivered.
 	// "comment" (default): POST a comment on channels.alerts issue key.

@@ -2309,6 +2309,63 @@ agents:
 	}
 }
 
+func TestLoad_JiraBackendEnvInterpolation(t *testing.T) {
+	t.Setenv("JIRA_SITE", "env-org.atlassian.net")
+	t.Setenv("JIRA_PROJECT", "OPS")
+	raw := []byte(`
+project: jira-team
+coordination:
+  backend: jira
+  jira:
+    site: "${JIRA_SITE:-your-org.atlassian.net}"
+    project: "${JIRA_PROJECT:-ENG}"
+  channels:
+    tasks: "clem-todo"
+agents:
+  lead:
+    name: Lead
+    model: claude-sonnet-4-6
+    iteration: 5m
+    prompt: go
+`)
+	cfg, err := Load(writeYAML(t, string(raw)))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Coordination.Jira.Site != "env-org.atlassian.net" {
+		t.Fatalf("Jira.Site = %q, want env-org.atlassian.net", cfg.Coordination.Jira.Site)
+	}
+	if cfg.Coordination.Jira.Project != "OPS" {
+		t.Fatalf("Jira.Project = %q, want OPS", cfg.Coordination.Jira.Project)
+	}
+}
+
+func TestLoad_JiraBackendEnvInterpolationDefault(t *testing.T) {
+	raw := []byte(`
+project: jira-team
+coordination:
+  backend: jira
+  jira:
+    site: "${JIRA_SITE_UNSET_XYZ:-fallback.atlassian.net}"
+    project: "ENG"
+  channels:
+    tasks: "clem-todo"
+agents:
+  lead:
+    name: Lead
+    model: claude-sonnet-4-6
+    iteration: 5m
+    prompt: go
+`)
+	cfg, err := Load(writeYAML(t, string(raw)))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Coordination.Jira.Site != "fallback.atlassian.net" {
+		t.Fatalf("Jira.Site = %q, want fallback.atlassian.net", cfg.Coordination.Jira.Site)
+	}
+}
+
 func TestJiraCoordination_ProtocolDocs(t *testing.T) {
 	j := JiraCoordination{
 		Site:          "acme.atlassian.net",

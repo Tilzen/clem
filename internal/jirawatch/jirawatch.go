@@ -23,6 +23,8 @@ JQL_EXTRA="{{.JQLExtra}}"
 AGENT_KEY="{{.AgentKey}}"
 POLL_INTERVAL={{.PollSeconds}}
 DEBOUNCE={{.DebounceSeconds}}
+BACKOFF=0
+MAX_BACKOFF=900
 STATE_FILE="$HOME/.claude/jira-watch.state"
 LOGFILE="$HOME/.claude/{{.AgentKey}}-jira-watch.log"
 
@@ -75,31 +77,60 @@ poll_once() {
         return
     fi
     load_state
-    local body code
-    body=$(mktemp)
-    trap 'rm -f "$body"' RETURN
     local jql="project = ${PROJECT} AND labels = \"${LABEL}\" AND assignee is EMPTY"
     [ -n "$JQL_EXTRA" ] && jql="${jql} ${JQL_EXTRA}"
-    code=$(curl -sS -o "$body" -w '%{http_code}' \
-        -u "$JIRA_USERNAME:$JIRA_API_TOKEN" \
-        -H "Content-Type: application/json" \
-        -H "Accept: application/json" \
-        -d "{\"jql\":\"${jql}\",\"fields\":[\"key\"],\"maxResults\":30}" \
-        "https://${SITE}/rest/api/3/search")
-    if [ "$code" != "200" ]; then
-        log "Jira API returned HTTP $code"
-        return
-    fi
-    NEW_IDS=$(python3 -c "
+    local all_keys="" page_token="" body code payload page_result page_keys
+    while true; do
+        body=$(mktemp)
+        payload=$(python3 -c "import json,sys; jql=sys.argv[1]; token=sys.argv[2]; req={'jql':jql,'fields':['key'],'maxResults':50}; token and req.update({'nextPageToken':token}); print(json.dumps(req))" "$jql" "$page_token")
+        code=$(curl -sS -o "$body" -w '%{http_code}' \
+            -u "$JIRA_USERNAME:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            -d "$payload" \
+            "https://${SITE}/rest/api/3/search/jql")
+        if [ "$code" = "429" ] || [ "$code" = "401" ]; then
+            log "Jira API returned HTTP $code — backing off"
+            if [ "$BACKOFF" -eq 0 ]; then
+                BACKOFF=60
+            else
+                BACKOFF=$(( BACKOFF * 2 ))
+                [ "$BACKOFF" -gt "$MAX_BACKOFF" ] && BACKOFF="$MAX_BACKOFF"
+            fi
+            rm -f "$body"
+            return
+        fi
+        if [ "$code" != "200" ]; then
+            log "Jira API returned HTTP $code"
+            BACKOFF=0
+            rm -f "$body"
+            return
+        fi
+        BACKOFF=0
+        page_result=$(python3 -c "
 import json,sys
 try:
     data=json.load(open(sys.argv[1]))
 except Exception:
+    print()
+    print('---')
+    print()
     sys.exit(0)
-issues=data.get('issues') or []
-keys=sorted(i.get('key','') for i in issues if isinstance(i,dict) and i.get('key'))
+keys=[i.get('key','') for i in (data.get('issues') or []) if isinstance(i,dict) and i.get('key')]
+token=data.get('nextPageToken') or ''
 print(' '.join(keys))
-" "$body" 2>/dev/null || true)
+print('---')
+print(token)
+" "$body")
+        page_keys=$(echo "$page_result" | sed -n '1p')
+        page_token=$(echo "$page_result" | sed -n '3p')
+        if [ -n "$page_keys" ]; then
+            all_keys="${all_keys} ${page_keys}"
+        fi
+        rm -f "$body"
+        [ -z "$page_token" ] && break
+    done
+    NEW_IDS=$(echo "$all_keys" | tr ' ' '\n' | sed '/^$/d' | LC_ALL=C sort -u | tr '\n' ' ' | sed 's/ $//')
     if [ "$HAD_STATE_FILE" -eq 1 ]; then
         if comm -13 <(echo "$OLD_IDS" | tr ' ' '\n' | LC_ALL=C sort) <(echo "$NEW_IDS" | tr ' ' '\n' | LC_ALL=C sort) | grep -q .; then
             maybe_wake
@@ -111,7 +142,12 @@ print(' '.join(keys))
 log "starting Jira issue watcher for $SITE project=$PROJECT label=$LABEL poll=${POLL_INTERVAL}s"
 while true; do
     poll_once
-    sleep "$POLL_INTERVAL"
+    if [ "$BACKOFF" -gt 0 ]; then
+        log "sleeping ${BACKOFF}s after rate limit"
+        sleep "$BACKOFF"
+    else
+        sleep "$POLL_INTERVAL"
+    fi
 done
 `
 

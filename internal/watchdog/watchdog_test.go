@@ -57,7 +57,7 @@ func TestGenerateScript_PostRestartRecheckSuppressesAlert(t *testing.T) {
 func TestGenerateScript_DiscordBackendAlertCurl(t *testing.T) {
 	s := GenerateScript(baseCfg())
 	for _, want := range []string{
-		`if [ -n "$DISCORD_TOKEN" ] && [ -n "111" ]; then`,
+		`[ -n "$DISCORD_TOKEN" ] && curl`,
 		`https://discord.com/api/v10/channels/111/messages`,
 		`-H "Authorization: Bot $DISCORD_TOKEN"`,
 		`-d "{\"content\":\"$safe_msg\"}"`,
@@ -83,7 +83,7 @@ func TestGenerateScript_SlackBackendAlertCurl(t *testing.T) {
 	cfg.Coordination.Backend = "slack"
 	s := GenerateScript(cfg)
 	for _, want := range []string{
-		`if [ -n "$SLACK_MCP_XOXP_TOKEN" ] && [ -n "111" ]; then`,
+		`[ -n "$SLACK_MCP_XOXP_TOKEN" ] && curl`,
 		`https://slack.com/api/chat.postMessage`,
 		`-H "Authorization: Bearer $SLACK_MCP_XOXP_TOKEN"`,
 		`-d "{\"channel\":\"111\",\"text\":\"$safe_msg\"}"`,
@@ -239,7 +239,7 @@ func TestGenerateScript_GitHubBackendAlertCurl(t *testing.T) {
 	cfg.Coordination.Channels["alerts"] = "42"
 	s := GenerateScript(cfg)
 	for _, want := range []string{
-		`if [ -n "$GH_TOKEN" ] && [ -n "42" ]; then`,
+		`[ -n "$GH_TOKEN" ] && [ -n "42" ] && curl`,
 		`api.github.com/repos/owner/repo/issues/42/comments`,
 		`-H "Authorization: Bearer $GH_TOKEN"`,
 		`-d "{\"body\":\"$safe_msg\"}"`,
@@ -255,6 +255,27 @@ func TestGenerateScript_GitHubBackendAlertCurl(t *testing.T) {
 	} {
 		if strings.Contains(s, deny) {
 			t.Errorf("github-backend script must not contain %q\n---\n%s", deny, s)
+		}
+	}
+}
+
+func TestGenerateScript_JiraIssueModeAlertDedup(t *testing.T) {
+	cfg := baseCfg()
+	cfg.Coordination.Backend = "jira"
+	cfg.Coordination.Jira = config.JiraCoordination{
+		Site:       "acme.atlassian.net",
+		Project:    "ENG",
+		AlertsMode: "issue",
+	}
+	s := GenerateScript(cfg)
+	for _, want := range []string{
+		`last-incident.hash`,
+		`ALERT (deduped)`,
+		`[ -n "$JIRA_API_TOKEN" ] && [ -n "$JIRA_USERNAME" ] && curl`,
+		`https://acme.atlassian.net/rest/api/3/issue`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("jira issue-mode watchdog missing %q\n---\n%s", want, s)
 		}
 	}
 }
