@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/jahwag/clem/internal/agent"
@@ -204,10 +206,12 @@ func provisionAgent(agentKey string, ac config.AgentConfig) error {
 	}
 	content, mode, err := agentdoc.Render(cfg, agentKey, ".")
 	if err != nil {
-		return fmt.Errorf("rendering CLAUDE.local.md for %s: %w", agentKey, err)
+		return fmt.Errorf("rendering instruction file for %s: %w", agentKey, err)
 	}
 	if content != nil {
-		dst := filepath.Join(workDir, "CLAUDE.local.md")
+		// Each runtime reads a different instruction file from the work dir:
+		// claude-code → CLAUDE.local.md, opencode/codex → AGENTS.md.
+		dst := filepath.Join(workDir, ac.InstructionFileName())
 		if err := os.WriteFile(dst, content, 0644); err != nil {
 			return fmt.Errorf("writing %s: %w", dst, err)
 		}
@@ -294,6 +298,18 @@ func writeAgentEnv(agentKey string, ac config.AgentConfig, osUser, homeDir strin
 	}
 
 	flatSecrets := vault.FlatSecrets(secrets)
+
+	if policy := cfg.Vault.ExposurePolicy; policy != "off" {
+		if violations := exposureViolations(flatSecrets, ac.BrokeredSecrets, ac.RevealSecrets); len(violations) > 0 {
+			msg := fmt.Sprintf("agent %s: %d granted key(s) neither brokered nor revealed: %s\n  (add to brokered_secrets, reveal_secrets, or set vault.exposure_policy: off)",
+				agentKey, len(violations), strings.Join(violations, ", "))
+			if policy == "strict" {
+				return nil, "", fmt.Errorf("%s", msg)
+			}
+			fmt.Fprintf(os.Stderr, "  warning: %s\n", msg)
+		}
+	}
+
 	merged := make(map[string]string, len(flatSecrets)+len(providerEnv)+12)
 	if ac.VaultBroker {
 		// agent-vault brokered: consolidate this agent's brokered secrets +
@@ -348,6 +364,27 @@ func writeAgentEnv(agentKey string, ac config.AgentConfig, osUser, homeDir strin
 		fmt.Printf("  warning: agent %s has GH_TOKEN but no git_email in clem.yaml — commits may leak operator identity\n", agentKey)
 	}
 	return secrets, ghToken, nil
+}
+
+// exposureViolations returns the sorted set of keys present in flat that are
+// neither brokered nor explicitly revealed. These are candidates that the
+// exposure policy check will warn or error on.
+func exposureViolations(flat map[string]string, brokered, revealed []string) []string {
+	skip := make(map[string]bool, len(brokered)+len(revealed))
+	for _, k := range brokered {
+		skip[k] = true
+	}
+	for _, k := range revealed {
+		skip[k] = true
+	}
+	var violations []string
+	for k := range flat {
+		if !skip[k] {
+			violations = append(violations, k)
+		}
+	}
+	sort.Strings(violations)
+	return violations
 }
 
 // brokeredSeedInputs resolves everything the brokering flow needs for one

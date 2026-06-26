@@ -132,6 +132,81 @@ func TestSet_AddsKeyToExistingFile(t *testing.T) {
 	}
 }
 
+func TestRenameVault_ReEncryptsUnderNewName(t *testing.T) {
+	requireSopsAndAge(t)
+	cleanup := setupVaultDir(t)
+	defer cleanup()
+
+	// Legacy underscore name that ValidateVaultName now rejects: Set won't make
+	// it, so seed it straight via sops (mirrors a pre-existing illegal vault).
+	if err := Set("seed", "K=1"); err != nil {
+		t.Fatalf("Set seed: %v", err)
+	}
+	if out, err := exec.Command("sops", "--set",
+		`["vaults"]["dev_to"]["DEV_TO_API_KEY"] "tok123"`, secretsFile).CombinedOutput(); err != nil {
+		t.Fatalf("seed dev_to: %v\n%s", err, out)
+	}
+	if err := RenameVault("dev_to", "dev-to"); err != nil {
+		t.Fatalf("RenameVault: %v", err)
+	}
+
+	out, err := exec.Command("sops", "-d", secretsFile).CombinedOutput()
+	if err != nil {
+		t.Fatalf("sops -d: %v\n%s", err, out)
+	}
+	plain := string(out)
+	if !strings.Contains(plain, "dev-to:") {
+		t.Errorf("expected new vault dev-to: after rename, got:\n%s", plain)
+	}
+	if strings.Contains(plain, "dev_to:") {
+		t.Errorf("old vault dev_to: still present after rename:\n%s", plain)
+	}
+	if !strings.Contains(plain, "tok123") {
+		t.Errorf("secret value not preserved through rename:\n%s", plain)
+	}
+}
+
+func TestRenameVault_RefusesOverwrite(t *testing.T) {
+	requireSopsAndAge(t)
+	cleanup := setupVaultDir(t)
+	defer cleanup()
+
+	if err := Set("a", "K=1"); err != nil {
+		t.Fatalf("Set a: %v", err)
+	}
+	if err := Set("b", "K=2"); err != nil {
+		t.Fatalf("Set b: %v", err)
+	}
+	if err := RenameVault("a", "b"); err == nil {
+		t.Fatal("expected error renaming onto an existing vault, got nil")
+	}
+}
+
+func TestRenameKey_ReEncryptsUnderNewKey(t *testing.T) {
+	requireSopsAndAge(t)
+	cleanup := setupVaultDir(t)
+	defer cleanup()
+
+	if err := Set("v1", "OLD_KEY=val42"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := RenameKey("v1", "OLD_KEY", "NEW_KEY"); err != nil {
+		t.Fatalf("RenameKey: %v", err)
+	}
+
+	out, err := exec.Command("sops", "-d", secretsFile).CombinedOutput()
+	if err != nil {
+		t.Fatalf("sops -d: %v\n%s", err, out)
+	}
+	plain := string(out)
+	if !strings.Contains(plain, "NEW_KEY:") || strings.Contains(plain, "OLD_KEY:") {
+		t.Errorf("expected OLD_KEY renamed to NEW_KEY, got:\n%s", plain)
+	}
+	if !strings.Contains(plain, "val42") {
+		t.Errorf("value not preserved through key rename:\n%s", plain)
+	}
+}
+
 func TestSet_RejectsMalformedKeyval(t *testing.T) {
 	cleanup := setupVaultDir(t)
 	defer cleanup()
@@ -361,5 +436,77 @@ func TestFlatSecrets(t *testing.T) {
 		if got[k] != v {
 			t.Errorf("FlatSecrets[%q] = %q, want %q", k, got[k], v)
 		}
+	}
+}
+
+func TestBug122_YqInjectionEnumeratesAllVaults(t *testing.T) {
+	if _, err := exec.LookPath("yq"); err != nil {
+		t.Skip("yq not on PATH")
+	}
+	decrypted := `vaults:
+  admin:
+    ROOT: topsecret
+  lead:
+    TOKEN: ok
+`
+	// When embedded in DecryptForAgent's fmt.Sprintf, this yq alternative operator
+	// falls back to the entire .vaults subtree when "missing" does not exist.
+	malicious := `missing // .vaults`
+	expr := ".vaults." + malicious + " | keys"
+	out, err := runYQ(expr, decrypted)
+	if err != nil {
+		t.Fatalf("runYQ: %v", err)
+	}
+	if !strings.Contains(out, "admin") || !strings.Contains(out, "lead") {
+		t.Fatalf("malicious vault name should enumerate all vaults, got:\n%s", out)
+	}
+
+	exprLead := ".vaults.lead | keys"
+	outLead, err := runYQ(exprLead, decrypted)
+	if err != nil {
+		t.Fatalf("runYQ lead: %v", err)
+	}
+	if strings.Contains(outLead, "admin") {
+		t.Fatalf("valid vault name should not expose admin vault, got:\n%s", outLead)
+	}
+}
+
+func TestValidateVaultName_RejectsInjection(t *testing.T) {
+	for _, name := range []string{
+		"missing // .vaults",
+		"shared // .vaults",
+		"UPPER",
+		"has_underscore",
+		"has.dot",
+		"",
+	} {
+		if err := ValidateVaultName(name); err == nil {
+			t.Errorf("ValidateVaultName(%q) expected error", name)
+		}
+	}
+	if err := ValidateVaultName("github"); err != nil {
+		t.Errorf("ValidateVaultName(github): %v", err)
+	}
+}
+
+func TestDecryptForAgent_RejectsInvalidVaultName(t *testing.T) {
+	_, err := DecryptForAgent("lead", []string{"missing // .vaults"})
+	if err == nil {
+		t.Fatal("expected error for malicious vault name")
+	}
+	if !strings.Contains(err.Error(), "vault name") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSet_RejectsInvalidVaultName(t *testing.T) {
+	cleanup := setupVaultDir(t)
+	defer cleanup()
+	err := Set("bad // vault", "KEY=value")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "vault name") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

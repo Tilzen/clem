@@ -729,6 +729,61 @@ func TestHasRefreshToken(t *testing.T) {
 	}
 }
 
+func writeCodexAuth(t *testing.T, dir string, auth map[string]any) {
+	t.Helper()
+	codexDir := filepath.Join(dir, ".codex")
+	if err := os.MkdirAll(codexDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(codexDir, "auth.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCodexNeedsLogin(t *testing.T) {
+	// No auth.json at all → needs login.
+	if !CodexNeedsLogin(t.TempDir()) {
+		t.Error("missing auth.json should require login")
+	}
+
+	// auth.json with neither refresh token nor API key → needs login.
+	dir := t.TempDir()
+	writeCodexAuth(t, dir, map[string]any{"tokens": map[string]any{"access_token": "short"}})
+	if !CodexNeedsLogin(dir) {
+		t.Error("auth without refresh token or API key should require login")
+	}
+
+	// OAuth refresh token present → authenticated.
+	dir = t.TempDir()
+	writeCodexAuth(t, dir, map[string]any{"tokens": map[string]any{"refresh_token": "rt_abc"}})
+	if CodexNeedsLogin(dir) {
+		t.Error("auth with refresh token should not require login")
+	}
+
+	// API-key login (no OAuth tokens) → authenticated.
+	dir = t.TempDir()
+	writeCodexAuth(t, dir, map[string]any{"OPENAI_API_KEY": "sk-test"})
+	if CodexNeedsLogin(dir) {
+		t.Error("auth with API key should not require login")
+	}
+
+	// Malformed JSON → needs login (fail safe).
+	dir = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".codex"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".codex", "auth.json"), []byte("{not json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if !CodexNeedsLogin(dir) {
+		t.Error("malformed auth.json should require login")
+	}
+}
+
 func TestWriteSettings_WritesExpectedFiles(t *testing.T) {
 	stub := withStub(t)
 	dir := t.TempDir()
@@ -1775,5 +1830,47 @@ func TestWriteSystemdEnvFile_RejectsNewline(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "x.env")
 	if err := WriteSystemdEnvFile(path, map[string]string{"K": "a\nb"}); err == nil {
 		t.Fatal("expected error for newline in secret value")
+	}
+}
+
+func TestWriteWranglerConfig_LiteralStringsPreserveSpecialChars(t *testing.T) {
+	homeDir := t.TempDir()
+	// These chars corrupted the file when it used TOML basic strings:
+	// " broke the string delimiter and \ was treated as an escape prefix.
+	secrets := map[string]string{
+		"WRANGLER_OAUTH_TOKEN":   `tok"en\value`,
+		"WRANGLER_REFRESH_TOKEN": `ref\res"h`,
+		"WRANGLER_EXPIRATION":    "2099-01-01T00:00:00Z",
+	}
+	if err := WriteWranglerConfig("testuser", homeDir, secrets); err != nil {
+		t.Fatalf("WriteWranglerConfig: %v", err)
+	}
+	configPath := filepath.Join(homeDir, ".config", ".wrangler", "config", "default.toml")
+	b, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("reading config: %v", err)
+	}
+	got := string(b)
+	// Values must appear verbatim inside TOML literal strings (single-quoted).
+	if !strings.Contains(got, `oauth_token = 'tok"en\value'`) {
+		t.Errorf("oauth_token not written as literal string, got:\n%s", got)
+	}
+	if !strings.Contains(got, `refresh_token = 'ref\res"h'`) {
+		t.Errorf("refresh_token not written as literal string, got:\n%s", got)
+	}
+	info, _ := os.Stat(configPath)
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("config file mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestWriteWranglerConfig_SkipsWhenSecretsAbsent(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := WriteWranglerConfig("testuser", homeDir, map[string]string{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	configPath := filepath.Join(homeDir, ".config", ".wrangler", "config", "default.toml")
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Error("config file should not be written when secrets absent")
 	}
 }

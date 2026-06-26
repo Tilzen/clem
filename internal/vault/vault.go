@@ -87,6 +87,9 @@ func Init() error {
 // Set sets a secret key for a vault in secrets.sops.yaml using sops --set.
 // keyval should be "KEY=value".
 func Set(vaultName, keyval string) error {
+	if err := ValidateVaultName(vaultName); err != nil {
+		return err
+	}
 	parts := strings.SplitN(keyval, "=", 2)
 	if len(parts) != 2 {
 		return fmt.Errorf("invalid format, expected KEY=value, got: %s", keyval)
@@ -131,6 +134,9 @@ func Set(vaultName, keyval string) error {
 
 // Delete removes a secret key (or whole vault if key is empty) from secrets.sops.yaml.
 func Delete(vaultName, key string) error {
+	if err := ValidateVaultName(vaultName); err != nil {
+		return err
+	}
 	if key != "" {
 		if err := validateSecretKey(key); err != nil {
 			return err
@@ -142,11 +148,11 @@ func Delete(vaultName, key string) error {
 
 	var unsetExpr string
 	if key == "" {
-		unsetExpr = fmt.Sprintf(`["vaults"]["%s"]`, strings.ReplaceAll(vaultName, `"`, `\"`))
+		unsetExpr = fmt.Sprintf(`["vaults"]["%s"]`, jqEscape(vaultName))
 	} else {
 		unsetExpr = fmt.Sprintf(`["vaults"]["%s"]["%s"]`,
-			strings.ReplaceAll(vaultName, `"`, `\"`),
-			strings.ReplaceAll(key, `"`, `\"`),
+			jqEscape(vaultName),
+			jqEscape(key),
 		)
 	}
 
@@ -163,8 +169,129 @@ func Delete(vaultName, key string) error {
 	return nil
 }
 
+// looseVaultName also accepts the legacy underscore names that ValidateVaultName
+// now rejects, so a vault stuck with an old illegal name can still be renamed away.
+var looseVaultName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,30}$`)
+
+func validateLooseVaultName(name string) error {
+	if !looseVaultName.MatchString(name) {
+		return fmt.Errorf("vault name %q has characters unsafe as a yq path segment", name)
+	}
+	return nil
+}
+
+// RenameVault renames an entire vault. sops binds the YAML key path into each
+// value's AAD, so a raw key edit breaks decryption — every secret must be
+// re-encrypted under the new name via sops --set, then the old vault unset.
+func RenameVault(oldName, newName string) error {
+	if err := validateLooseVaultName(oldName); err != nil {
+		return err
+	}
+	if err := ValidateVaultName(newName); err != nil {
+		return err
+	}
+	if oldName == newName {
+		return fmt.Errorf("old and new vault names are identical: %q", oldName)
+	}
+	if err := ensureSops(); err != nil {
+		return err
+	}
+	decrypted, err := sopsDecrypt()
+	if err != nil {
+		return err
+	}
+	if exists, _ := yamlKeyExists(".vaults."+oldName, decrypted); !exists {
+		return fmt.Errorf("vault %q not found in %s", oldName, secretsFile)
+	}
+	if taken, _ := yamlKeyExists(".vaults."+newName, decrypted); taken {
+		return fmt.Errorf("vault %q already exists — refusing to overwrite", newName)
+	}
+	entries, err := vaultEntries(oldName, decrypted)
+	if err != nil {
+		return err
+	}
+	for _, kv := range entries {
+		setExpr := fmt.Sprintf(`["vaults"]["%s"]["%s"] "%s"`,
+			jqEscape(newName), jqEscape(kv[0]), jqEscape(kv[1]))
+		if out, err := exec.Command("sops", "--set", setExpr, secretsFile).CombinedOutput(); err != nil {
+			return fmt.Errorf("sops --set %s.%s: %w\n%s", newName, kv[0], err, out)
+		}
+	}
+	unsetExpr := fmt.Sprintf(`["vaults"]["%s"]`, jqEscape(oldName))
+	if out, err := exec.Command("sops", "unset", secretsFile, unsetExpr).CombinedOutput(); err != nil {
+		return fmt.Errorf("sops unset %s: %w\n%s", oldName, err, out)
+	}
+	fmt.Printf("Renamed vault %s -> %s (%d secret(s))\n", oldName, newName, len(entries))
+	return nil
+}
+
+// RenameKey renames a single secret key within a vault, re-encrypting its value
+// under the new key (same AAD constraint as RenameVault).
+func RenameKey(vaultName, oldKey, newKey string) error {
+	if err := validateLooseVaultName(vaultName); err != nil {
+		return err
+	}
+	if err := validateSecretKey(newKey); err != nil {
+		return err
+	}
+	if oldKey == newKey {
+		return fmt.Errorf("old and new key names are identical: %q", oldKey)
+	}
+	if err := ensureSops(); err != nil {
+		return err
+	}
+	decrypted, err := sopsDecrypt()
+	if err != nil {
+		return err
+	}
+	if exists, _ := yamlKeyExists(fmt.Sprintf(".vaults.%s.%s", vaultName, oldKey), decrypted); !exists {
+		return fmt.Errorf("%s.%s not found in %s", vaultName, oldKey, secretsFile)
+	}
+	if taken, _ := yamlKeyExists(fmt.Sprintf(".vaults.%s.%s", vaultName, newKey), decrypted); taken {
+		return fmt.Errorf("%s.%s already exists — refusing to overwrite", vaultName, newKey)
+	}
+	value, err := runYQ(fmt.Sprintf(".vaults.%s.%s", vaultName, oldKey), decrypted)
+	if err != nil {
+		return fmt.Errorf("yq reading %s.%s: %w", vaultName, oldKey, err)
+	}
+	setExpr := fmt.Sprintf(`["vaults"]["%s"]["%s"] "%s"`,
+		jqEscape(vaultName), jqEscape(newKey), jqEscape(strings.TrimRight(value, "\n")))
+	if out, err := exec.Command("sops", "--set", setExpr, secretsFile).CombinedOutput(); err != nil {
+		return fmt.Errorf("sops --set %s.%s: %w\n%s", vaultName, newKey, err, out)
+	}
+	unsetExpr := fmt.Sprintf(`["vaults"]["%s"]["%s"]`, jqEscape(vaultName), jqEscape(oldKey))
+	if out, err := exec.Command("sops", "unset", secretsFile, unsetExpr).CombinedOutput(); err != nil {
+		return fmt.Errorf("sops unset %s.%s: %w\n%s", vaultName, oldKey, err, out)
+	}
+	fmt.Printf("Renamed %s.%s -> %s.%s\n", vaultName, oldKey, vaultName, newKey)
+	return nil
+}
+
+// vaultEntries returns the KEY/value pairs of a vault from already-decrypted YAML.
+func vaultEntries(vaultName, decrypted string) ([][2]string, error) {
+	expr := fmt.Sprintf(".vaults.%s | to_entries | .[] | .key + \"=\" + .value", vaultName)
+	out, err := runYQ(expr, decrypted)
+	if err != nil {
+		return nil, fmt.Errorf("yq reading vault %s: %w", vaultName, err)
+	}
+	var entries [][2]string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			entries = append(entries, [2]string{parts[0], parts[1]})
+		}
+	}
+	return entries, nil
+}
+
 // Get retrieves a secret key for a vault from secrets.sops.yaml.
 func Get(vaultName, key string) error {
+	if err := ValidateVaultName(vaultName); err != nil {
+		return err
+	}
 	if err := validateSecretKey(key); err != nil {
 		return err
 	}
@@ -240,6 +367,11 @@ func List() error {
 // Later vaults in the list win on key conflicts.
 // Falls back to legacy agents: structure with a warning if vaults: key is absent.
 func DecryptForAgent(agentKey string, vaultNames []string) (map[string]string, error) {
+	for _, vaultName := range vaultNames {
+		if err := ValidateVaultName(vaultName); err != nil {
+			return nil, err
+		}
+	}
 	if err := ensureSops(); err != nil {
 		return nil, err
 	}

@@ -650,7 +650,7 @@ func TestGenerateService_HardeningUsesAbsoluteHomePath(t *testing.T) {
 	}
 }
 
-func TestGenerate_OpencodeRunnerHasClaudeMdGuard(t *testing.T) {
+func TestGenerate_OpencodeRunnerHasInstructionGuard(t *testing.T) {
 	cfg := baseCfg("lead", config.AgentConfig{
 		Name:      "Lead",
 		Runtime:   "opencode",
@@ -660,16 +660,79 @@ func TestGenerate_OpencodeRunnerHasClaudeMdGuard(t *testing.T) {
 	})
 	out := Generate(cfg, "lead")
 
+	// opencode reads AGENTS.md, not CLAUDE.local.md, so the oversize guard must
+	// check the file the runtime actually reads.
 	for _, want := range []string{
 		"MAX_CLAUDE_MD_BYTES=12288",
 		"MAX_LESSONS_MESSAGES=25",
-		`if [ -f "$WORKDIR/CLAUDE.local.md" ]`,
+		`if [ -f "$WORKDIR/AGENTS.md" ]`,
 		"SIZE > MAX_CLAUDE_MD_BYTES",
-		"WARNING: CLAUDE.local.md is ${SIZE} bytes",
+		"WARNING: AGENTS.md is ${SIZE} bytes",
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("opencode runner missing CLAUDE.local.md guard: expected %q\nfull output:\n%s", want, out)
+			t.Errorf("opencode runner missing AGENTS.md guard: expected %q\nfull output:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "CLAUDE.local.md") {
+		t.Errorf("opencode runner should not reference CLAUDE.local.md (uses AGENTS.md)")
+	}
+}
+
+func TestGenerate_CodexRunnerSelected(t *testing.T) {
+	cfg := baseCfg("lead", config.AgentConfig{
+		Name:      "Lead",
+		Runtime:   "codex",
+		Model:     "gpt-5.4-codex",
+		Iteration: "1m",
+		Prompt:    "do the thing. When done, run: kill $PPID",
+	})
+	out := Generate(cfg, "lead")
+
+	for _, want := range []string{
+		`CODEX="$HOME/.npm-global/bin/codex"`,            // codex binary path
+		"~/.codex/config.toml",                            // TOML config target
+		`cli_auth_credentials_store = \"file\"`,           // headless auth store
+		`forced_login_method = \"chatgpt\"`,               // clem login OAuth flow
+		"[mcp_servers.",                                    // TOML MCP tables
+		"--dangerously-bypass-approvals-and-sandbox",      // unattended execution
+		`timeout 7200 "$CODEX"`,                            // 2h interactive TUI cap
+		"tmux send-keys -l -t lead",                        // prompt injection contract
+		"--model gpt-5.4-codex",                            // model passthrough
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("codex runner missing %q\nfull output:\n%s", want, out)
+		}
+	}
+
+	// Codex must NOT carry the Anthropic-only quota/effort machinery.
+	if strings.Contains(out, "credentials.json") {
+		t.Errorf("codex runner should not reference claude credentials.json")
+	}
+}
+
+func TestGenerate_CodexRunnerHasInstructionGuard(t *testing.T) {
+	cfg := baseCfg("lead", config.AgentConfig{
+		Name:      "Lead",
+		Runtime:   "codex",
+		Model:     "gpt-5.4-codex",
+		Iteration: "1m",
+		Prompt:    "do the thing",
+	})
+	out := Generate(cfg, "lead")
+
+	// codex reads AGENTS.md, not CLAUDE.local.md.
+	for _, want := range []string{
+		"MAX_CLAUDE_MD_BYTES=12288",
+		`if [ -f "$WORKDIR/AGENTS.md" ]`,
+		"SIZE > MAX_CLAUDE_MD_BYTES",
+		"WARNING: AGENTS.md is ${SIZE} bytes",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("codex runner missing AGENTS.md guard: expected %q\nfull output:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "CLAUDE.local.md") {
+		t.Errorf("codex runner should not reference CLAUDE.local.md (uses AGENTS.md)")
 	}
 }
 
@@ -711,7 +774,7 @@ func TestGenerate_SidecarHTTPEntryForSubscriber(t *testing.T) {
 	cfg := sidecarRunnerCfg()
 	out := Generate(cfg, "lead")
 	for _, want := range []string{
-		`for _name, _port in [["es-ro", 14500]]:`,
+		`for _name, _port in [['es-ro', 14500]]:`,
 		`'type': 'http'`,
 		`'url': 'http://127.0.0.1:%d/mcp' % _port`,
 	} {
@@ -731,7 +794,10 @@ func TestGenerate_NoSidecarEntryForNonSubscriber(t *testing.T) {
 
 func TestSidecarServersLiteral(t *testing.T) {
 	cfg := sidecarRunnerCfg()
-	if got := sidecarServersLiteral(cfg, "lead"); got != `[["es-ro", 14500]]` {
+	// Single-quoted: the literal is interpolated into the runner's double-quoted
+	// `python3 -c "..."` block, so double quotes would break out of the shell
+	// string and python would see a bare identifier (NameError).
+	if got := sidecarServersLiteral(cfg, "lead"); got != `[['es-ro', 14500]]` {
 		t.Errorf("subscriber literal = %q", got)
 	}
 	if got := sidecarServersLiteral(cfg, "solo"); got != `[]` {

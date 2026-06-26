@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -603,6 +604,26 @@ agents:
 	}
 }
 
+func TestLoad_SubagentModelRejectsShellMetacharacters(t *testing.T) {
+	cases := []string{
+		`"$(touch /tmp/pwned)"`,
+		"$(reboot)",
+		`"model with spaces"`,
+		`"model'quote"`,
+	}
+	for _, val := range cases {
+		path := writeYAML(t, subagentYAML(val))
+		_, err := Load(path)
+		if err == nil {
+			t.Errorf("Load accepted subagent_model %s, want error", val)
+			continue
+		}
+		if !strings.Contains(err.Error(), "subagent_model") {
+			t.Errorf("error should name subagent_model, got: %v", err)
+		}
+	}
+}
+
 func TestLoad_GitIdentityParsed(t *testing.T) {
 	path := writeYAML(t, `
 project: myteam
@@ -676,6 +697,65 @@ agents:
 				t.Errorf("error should name git_email, got: %v", err)
 			}
 		})
+	}
+}
+
+func TestLoad_GitNameRejectsControlCharacters(t *testing.T) {
+	cases := map[string]string{
+		"newline":         "Ada\n[commit]\n\tgpgsign = false",
+		"carriage return": "Ada\rEvil",
+		"tab":             "Ada\tEvil",
+		"control char":    "Ada\x01Evil",
+	}
+	for name, gitName := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := writeYAML(t, `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+operator:
+  discord_ids: ["277434478803156993"]
+agents:
+  lead:
+    name: "Ada"
+    model: "claude-sonnet-4-6"
+    git_name: `+fmt.Sprintf("%q", gitName)+`
+`)
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("Load accepted git_name %q, want error", gitName)
+			}
+			if !strings.Contains(err.Error(), "git_name") {
+				t.Errorf("error should name git_name, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoad_GitNameAllowsSpaces(t *testing.T) {
+	path := writeYAML(t, `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+operator:
+  discord_ids: ["277434478803156993"]
+agents:
+  lead:
+    name: "Ada"
+    model: "claude-sonnet-4-6"
+    git_name: "Ada Lovelace"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load rejected git_name with space: %v", err)
+	}
+	ac := cfg.Agents["lead"]
+	if ac.GitName != "Ada Lovelace" {
+		t.Errorf("GitName = %q, want %q", ac.GitName, "Ada Lovelace")
 	}
 }
 
@@ -1879,6 +1959,43 @@ func TestValidateMCPSidecars_OpencodeRejected(t *testing.T) {
 	}
 }
 
+func TestValidateMCPSidecars_CodexAllowed(t *testing.T) {
+	// codex speaks streamable-HTTP MCP, so sidecars are supported (unlike opencode).
+	cfg := &Config{
+		Project: "t",
+		MCPSidecars: MCPSidecarsConfig{Servers: []SidecarServer{
+			{Name: "es-ro", Identity: "shared", Command: "/bin/x", Secrets: []string{"K"}, SecretsVault: "infra"},
+		}},
+		Agents: map[string]AgentConfig{
+			"lead": {Name: "L", Runtime: "codex", Sidecars: []string{"es-ro"}},
+		},
+	}
+	if err := cfg.validateMCPSidecars(); err != nil {
+		t.Fatalf("codex sidecars should be allowed, got: %v", err)
+	}
+}
+
+func TestRuntimeKind_Codex(t *testing.T) {
+	if got := (AgentConfig{Runtime: "codex"}).RuntimeKind(); got != "codex" {
+		t.Fatalf("RuntimeKind() = %q, want codex", got)
+	}
+}
+
+func TestInstructionFileName(t *testing.T) {
+	cases := map[string]string{
+		"":            "CLAUDE.local.md", // default = claude-code
+		"claude-code": "CLAUDE.local.md",
+		"claude":      "CLAUDE.local.md",
+		"opencode":    "AGENTS.md",
+		"codex":       "AGENTS.md",
+	}
+	for runtime, want := range cases {
+		if got := (AgentConfig{Runtime: runtime}).InstructionFileName(); got != want {
+			t.Errorf("runtime %q: InstructionFileName() = %q, want %q", runtime, got, want)
+		}
+	}
+}
+
 func TestValidateMCPSidecars_AgentVaultPortCollision(t *testing.T) {
 	cfg := &Config{
 		Project: "t",
@@ -2278,5 +2395,100 @@ agents:
 `
 	if _, err := Load(writeYAML(t, yaml)); err == nil || !strings.Contains(err.Error(), "iteration_night") {
 		t.Errorf("expected iteration_night validation error, got %v", err)
+	}
+}
+
+func TestLoad_RejectsInvalidVaultName(t *testing.T) {
+	path := writeYAML(t, minYAML("")+`
+    vaults: ["missing // .vaults"]
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected load error for malicious vault name")
+	}
+	if !strings.Contains(err.Error(), "vault name") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoad_AcceptsValidVaultNames(t *testing.T) {
+	path := writeYAML(t, minYAML("")+`
+    vaults: [github, discord-lead]
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Agents["lead"].Vaults) != 2 {
+		t.Fatalf("vaults = %v", cfg.Agents["lead"].Vaults)
+	}
+}
+
+func TestLoad_ExposurePolicyValid(t *testing.T) {
+	for _, policy := range []string{"", "warn", "strict", "off"} {
+		line := ""
+		if policy != "" {
+			line = "\nvault:\n  exposure_policy: " + policy
+		}
+		yaml := minYAML("") + line
+		if _, err := Load(writeYAML(t, yaml)); err != nil {
+			t.Errorf("exposure_policy %q should load, got: %v", policy, err)
+		}
+	}
+}
+
+func TestLoad_ExposurePolicyRejectsInvalid(t *testing.T) {
+	yaml := minYAML("") + "\nvault:\n  exposure_policy: paranoid"
+	_, err := Load(writeYAML(t, yaml))
+	if err == nil {
+		t.Fatal("invalid exposure_policy must be rejected")
+	}
+	if !strings.Contains(err.Error(), "exposure_policy") {
+		t.Errorf("error must name exposure_policy, got: %v", err)
+	}
+}
+
+func TestLoad_RevealSecretsAccepted(t *testing.T) {
+	yaml := minYAML("") + "\n    reveal_secrets: [DISCORD_TOKEN, DEPLOY_KEY]"
+	cfg, err := Load(writeYAML(t, yaml))
+	if err != nil {
+		t.Fatalf("reveal_secrets should load: %v", err)
+	}
+	if len(cfg.Agents["lead"].RevealSecrets) != 2 {
+		t.Errorf("reveal_secrets = %v, want 2 entries", cfg.Agents["lead"].RevealSecrets)
+	}
+}
+
+func TestLoad_BrokeredSecretWithZeroServicesWarns(t *testing.T) {
+	raw := `
+project: myteam
+coordination:
+  backend: discord
+  server_id: "1"
+  channels: {general: "g"}
+operator:
+  discord_ids: ["277434478803156993"]
+vault:
+  backend: agent-vault
+agents:
+  lead:
+    name: "Lead"
+    model: "claude-sonnet-4-6"
+    vaults: [anthropic]
+    vault_broker: true
+    brokered_secrets: [GH_TOKEN]
+`
+	r, w, _ := os.Pipe()
+	old := os.Stderr
+	os.Stderr = w
+	_, err := Load(writeYAML(t, raw))
+	w.Close()
+	os.Stderr = old
+	out, _ := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("zero-services brokered config must load without error, got: %v", err)
+	}
+	if !strings.Contains(string(out), "GH_TOKEN") || !strings.Contains(string(out), "placeholder") {
+		t.Errorf("expected placeholder warning for GH_TOKEN, got stderr: %q", string(out))
 	}
 }
